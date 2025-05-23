@@ -53,11 +53,30 @@ def default_zk_servers(use_ipv6: bool = False):
 
 
 class MonolithKazooClient(KazooClient):
+    def __init__(self, hosts, *args, **kwargs):
+        # existing auth-data injection
+        if "auth_data" not in kwargs:
+            kwargs["auth_data"] = get_zk_auth_data()
 
-  def __init__(self, *args, **kwargs):
-    if "auth_data" not in kwargs:
-      kwargs["auth_data"] = get_zk_auth_data()
-    super().__init__(*args, **kwargs)
+        # --- inject SSL/TLS settings from env ---
+        # Expect you’ve mounted Strimzi’s CA to /opt/zookeeper/certs/ca.crt
+        ca_path = os.environ.get("ZK_TRUST_FILE")
+        use_ssl = os.environ.get("ZK_USE_SSL", "false").lower() in ("1", "true")
+        if use_ssl and ca_path:
+            kwargs["use_ssl"] = True       # enable TLS
+            kwargs["ca"]       = ca_path   # path to CA bundle
+
+        # (optional) if you have client certs for mTLS:
+        certfile = os.environ.get("ZK_CERT_FILE")
+        keyfile  = os.environ.get("ZK_KEY_FILE")
+        if certfile:
+            kwargs["certfile"] = certfile
+        if keyfile:
+            kwargs["keyfile"]  = keyfile
+        # -------------------------------------
+
+        # now call the real KazooClient init
+        super().__init__(hosts=hosts, *args, **kwargs)
 
 
 def clear_zk_path(zk_server: str, job_name: str, force_clear_zk_path: bool):
