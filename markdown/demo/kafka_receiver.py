@@ -22,16 +22,18 @@ raw_feature_desc = {
 }
 
 def to_ragged(x):
-  return {
+  result = {
     'mov': tf.RaggedTensor.from_tensor(x['mov']),
     'uid': tf.RaggedTensor.from_tensor(x['uid']),
-    'label': x['label']
+    'label': x['label']  # Keep label as is since it's already a scalar tensor
   }
+  
+  return result
 
 # corresponds to serailize_one in kafka_producer.py
 def decode_example(v):
     x = tf.io.parse_example(v, raw_feature_desc)
-    return to_ragged(x)
+    return x  # Return the parsed features directly
 
 if __name__ == "__main__":
     dataset = create_plain_kafka_dataset(topics=["movie-train"],
