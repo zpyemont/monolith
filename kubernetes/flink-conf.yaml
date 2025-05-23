@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flink-conf
+data:
+  flink-conf.yaml: |
+    # RPC / slot configuration
+    jobmanager.rpc.address: flink-jobmanager
+    jobmanager.rpc.port: 6123
+    taskmanager.numberOfTaskSlots: 2
+
+    # restart strategy (optional)
+    restart-strategy: fixed-delay
+    restart-strategy.fixed-delay.attempts: 3
+    restart-strategy.fixed-delay.delay: 10 s
+
+    # Required new memory configs for Flink 1.20+
+    jobmanager.memory.process.size: 1600m
+    taskmanager.memory.process.size: 4096m

@@ -1,0 +1,215 @@
+---
+# 2) Headless Service for Parameter Server
+apiVersion: v1
+kind: Service
+metadata:
+  name: monolith-online-ps
+spec:
+  clusterIP: None
+  selector:
+    app: monolith-online-ps
+  ports:
+    - name: ps
+      port: 2223
+
+---
+# 3) Headless Service for Worker
+apiVersion: v1
+kind: Service
+metadata:
+  name: monolith-online-worker
+spec:
+  clusterIP: None
+  selector:
+    app: monolith-online-worker
+  ports:
+    - name: worker
+      port: 2222
+
+---
+# 4) StatefulSet for Parameter Server (native ZK TLS)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: monolith-online-ps
+spec:
+  serviceName: monolith-online-ps
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monolith-online-ps
+  template:
+    metadata:
+      labels:
+        app: monolith-online-ps
+    spec:
+      containers:
+      - name: ps
+        image: monolith:latest
+        imagePullPolicy: Never
+        args:
+          - "--training_type=online"
+          - "--kafka_topics=training-sample-topic"
+          - "--kafka_group_id=movie-online-group"
+          - "--kafka_servers=$(KAFKA_BOOTSTRAP_SERVERS)"
+          - "--model_dir=/checkpoints/movie_lens_tutorial"
+          - "--model_name=movie_lens_tutorial"
+          - "--zk_server=$(ZK_SERVER)"
+          - "--stream_timeout_ms=86400000"  # 24 hours
+          - "--skip_empty_batches=false"    # Keep running with no data
+          - "--min_batch_size=1"            # Train on any real data
+        env:
+          # TF_CONFIG for distributed training
+          - name: TF_CONFIG
+            value: '{"cluster": {"ps": ["monolith-online-ps-0.monolith-online-ps.default.svc.cluster.local:2223"], "worker": ["monolith-online-worker-0.monolith-online-worker.default.svc.cluster.local:2222"]}, "task": {"type": "ps", "index": 0}}'
+          # Kafka TLS (unchanged)
+          - name: KAFKA_BOOTSTRAP_SERVERS
+            value: "my-cluster-kafka-bootstrap.default.svc.cluster.local:9093"
+          - name: KAFKA_SECURITY_PROTOCOL
+            value: "SSL"
+          - name: KAFKA_SSL_CA_LOCATION
+            value: "/opt/kafka/certs/ca.crt"
+          - name: KAFKA_SSL_CERTIFICATE_LOCATION
+            value: "/opt/kafka/user/user.crt"
+          - name: KAFKA_SSL_KEY_LOCATION
+            value: "/opt/kafka/user/user.key"
+
+          # ZooKeeper TLS (native)
+          - name: ZK_SERVER
+            value: "my-cluster-zookeeper-client.default.svc.cluster.local:2181"
+          - name: ZK_USE_SSL
+            value: "true"
+          - name: ZK_TRUST_FILE
+            value: "/opt/tls/ca/ca.crt"
+          - name: ZK_CERT_FILE
+            value: "/opt/tls/client/client.crt"
+          - name: ZK_KEY_FILE
+            value: "/opt/tls/client/client.key"
+        ports:
+          - containerPort: 2223
+        volumeMounts:
+          - name: checkpoint-volume
+            mountPath: /checkpoints
+          - name: kafka-ca
+            mountPath: /opt/kafka/certs
+            readOnly: true
+          - name: kafka-user-tls
+            mountPath: /opt/kafka/user
+            readOnly: true
+          - name: zk-client-tls
+            mountPath: /opt/tls/client
+            readOnly: true
+          - name: zk-server-ca
+            mountPath: /opt/tls/ca
+            readOnly: true
+
+      volumes:
+        - name: checkpoint-volume
+          persistentVolumeClaim:
+            claimName: monolith-checkpoint-pvc
+        - name: kafka-ca
+          secret:
+            secretName: my-cluster-cluster-ca-cert
+        - name: kafka-user-tls
+          secret:
+            secretName: monolith-user
+        - name: zk-client-tls
+          secret:
+            secretName: monolith-zk-client
+        - name: zk-server-ca
+          secret:
+            secretName: my-cluster-cluster-ca-cert
+
+---
+# 5) StatefulSet for Worker (native ZK TLS)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: monolith-online-worker
+spec:
+  serviceName: monolith-online-worker
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monolith-online-worker
+  template:
+    metadata:
+      labels:
+        app: monolith-online-worker
+    spec:
+      containers:
+      - name: worker
+        image: monolith:latest
+        imagePullPolicy: Never
+        args:
+          - "--training_type=online"
+          - "--kafka_topics=training-sample-topic"
+          - "--kafka_group_id=movie-online-group"
+          - "--kafka_servers=$(KAFKA_BOOTSTRAP_SERVERS)"
+          - "--model_dir=/checkpoints/movie_lens_tutorial"
+          - "--model_name=movie_lens_tutorial"
+          - "--zk_server=$(ZK_SERVER)"
+          - "--stream_timeout_ms=86400000"  # 24 hours
+          - "--skip_empty_batches=false"    # Keep running with no data
+          - "--min_batch_size=1"            # Train on any real data
+        env:
+          # TF_CONFIG for distributed training
+          - name: TF_CONFIG
+            value: '{"cluster": {"ps": ["monolith-online-ps-0.monolith-online-ps.default.svc.cluster.local:2223"], "worker": ["monolith-online-worker-0.monolith-online-worker.default.svc.cluster.local:2222"]}, "task": {"type": "worker", "index": 0}}'
+          # Kafka TLS
+          - name: KAFKA_BOOTSTRAP_SERVERS
+            value: "my-cluster-kafka-bootstrap.default.svc.cluster.local:9093"
+          - name: KAFKA_SECURITY_PROTOCOL
+            value: "SSL"
+          - name: KAFKA_SSL_CA_LOCATION
+            value: "/opt/kafka/certs/ca.crt"
+          - name: KAFKA_SSL_CERTIFICATE_LOCATION
+            value: "/opt/kafka/user/user.crt"
+          - name: KAFKA_SSL_KEY_LOCATION
+            value: "/opt/kafka/user/user.key"
+
+          # ZooKeeper TLS
+          - name: ZK_SERVER
+            value: "my-cluster-zookeeper-client.default.svc.cluster.local:2181"
+          - name: ZK_USE_SSL
+            value: "true"
+          - name: ZK_TRUST_FILE
+            value: "/opt/tls/ca/ca.crt"
+          - name: ZK_CERT_FILE
+            value: "/opt/tls/client/client.crt"
+          - name: ZK_KEY_FILE
+            value: "/opt/tls/client/client.key"
+        ports:
+          - containerPort: 2222
+        volumeMounts:
+          - name: checkpoint-volume
+            mountPath: /checkpoints
+          - name: kafka-ca
+            mountPath: /opt/kafka/certs
+            readOnly: true
+          - name: kafka-user-tls
+            mountPath: /opt/kafka/user
+            readOnly: true
+          - name: zk-client-tls
+            mountPath: /opt/tls/client
+            readOnly: true
+          - name: zk-server-ca
+            mountPath: /opt/tls/ca
+            readOnly: true
+
+      volumes:
+        - name: checkpoint-volume
+          persistentVolumeClaim:
+            claimName: monolith-checkpoint-pvc
+        - name: kafka-ca
+          secret:
+            secretName: my-cluster-cluster-ca-cert
+        - name: kafka-user-tls
+          secret:
+            secretName: monolith-user
+        - name: zk-client-tls
+          secret:
+            secretName: monolith-zk-client
+        - name: zk-server-ca
+          secret:
+            secretName: my-cluster-cluster-ca-cert

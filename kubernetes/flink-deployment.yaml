@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-jobmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: jobmanager
+  template:
+    metadata:
+      labels:
+        component: jobmanager
+    spec:
+      volumes:
+        - name: flink-conf
+          configMap:
+            name: flink-conf
+      containers:
+        - name: jobmanager
+          image: flink:1.20.1
+          args: ["jobmanager"]
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "my-cluster-kafka-bootstrap.kafka.svc.cluster.local:9092"
+            - name: FLINK_CONF_DIR
+              value: "/etc/flink-conf"
+          volumeMounts:
+            - name: flink-conf
+              mountPath: /etc/flink-conf/flink-conf.yaml
+              subPath: flink-conf.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-taskmanager
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      component: taskmanager
+  template:
+    metadata:
+      labels:
+        component: taskmanager
+    spec:
+      volumes:
+        - name: flink-conf
+          configMap:
+            name: flink-conf
+      containers:
+        - name: taskmanager
+          image: flink:1.20.1
+          args: ["taskmanager"]
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "my-cluster-kafka-bootstrap.kafka.svc.cluster.local:9092"
+            - name: FLINK_CONF_DIR
+              value: "/etc/flink-conf"
+          volumeMounts:
+            - name: flink-conf
+              mountPath: /etc/flink-conf/flink-conf.yaml
+              subPath: flink-conf.yaml

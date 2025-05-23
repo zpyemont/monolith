@@ -1,0 +1,33 @@
+# kafka-cluster.yaml
+# — Deploys your Strimzi Kafka + ZooKeeper cluster into the 'monolith' namespace,
+#   with an internal TLS listener on 9093 that requires client certs.
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: my-cluster
+spec:
+  kafka:
+    replicas: 3
+    storage:
+      type: persistent-claim
+      size: 20Gi
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+        authentication:
+          type: tls  # require client certs :contentReference[oaicite:0]{index=0}
+  zookeeper:
+    replicas: 3
+    storage:
+      type: persistent-claim
+      size: 10Gi
+    # By default ZooKeeper client listener is encrypted but does not authenticate external clients
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}

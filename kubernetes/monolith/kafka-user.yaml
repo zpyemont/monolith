@@ -1,0 +1,11 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: monolith-user
+  labels:
+    strimzi.io/cluster: my-cluster      # associate with the Kafka cluster :contentReference[oaicite:0]{index=0}
+spec:
+  authentication:
+    type: tls
+  # (you can also add authorization.acls here if needed)
+

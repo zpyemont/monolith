@@ -1,0 +1,232 @@
+---
+# 1) ConfigMap holding your corrected TFJob manifest
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: monolith-tfjob-cm
+data:
+  tfjob.yaml: |
+    apiVersion: kubeflow.org/v1
+    kind: TFJob
+    metadata:
+      name: monolith-batch-job
+    spec:
+      runPolicy:
+        cleanPodPolicy: None
+        backoffLimit: 10
+        ttlSecondsAfterFinished: 86400
+      tfReplicaSpecs:
+        PS:
+          replicas: 2
+          restartPolicy: OnFailure
+          template:
+            spec:
+              containers:
+              - name: tensorflow
+                image: monolith:latest
+                imagePullPolicy: Never
+                command: ["python"]
+                args:
+                  - "/movie_online_model.py"
+                  - "--training_type=batch"
+                  - "--model_dir=/checkpoints/movie_lens_tutorial"
+                  - "--model_name=movie_lens_tutorial"
+                  - "--zk_server=$(ZK_SERVER)"
+                env:
+                  - name: POD_NAME
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.name
+                  - name: TF_CONFIG
+                    value: |
+                      {
+                        "cluster": {
+                          "worker": [
+                            "monolith-batch-worker-0.monolith-batch-worker.default.svc.cluster.local:2222",
+                            "monolith-batch-worker-1.monolith-batch-worker.default.svc.cluster.local:2222"
+                          ],
+                          "ps": [
+                            "monolith-batch-ps-0.monolith-batch-ps.default.svc.cluster.local:2223",
+                            "monolith-batch-ps-1.monolith-batch-ps.default.svc.cluster.local:2223"
+                          ]
+                        },
+                        "task": {"type": "ps", "index": 0}
+                      }
+                  # ZooKeeper TLS configuration
+                  - name: ZK_SERVER
+                    value: "my-cluster-zookeeper-client.default.svc.cluster.local:2181"
+                  - name: ZK_USE_SSL
+                    value: "true"
+                  - name: ZK_TRUST_FILE
+                    value: "/opt/tls/ca/ca.crt"
+                  - name: ZK_CERT_FILE
+                    value: "/opt/tls/client/client.crt"
+                  - name: ZK_KEY_FILE
+                    value: "/opt/tls/client/client.key"
+                resources:
+                  requests:
+                    cpu:  "500m"
+                    memory: "2Gi"
+                  limits:
+                    cpu:  "2"
+                    memory: "4Gi"
+                volumeMounts:
+                  - name: checkpoint-volume
+                    mountPath: /checkpoints
+                  - name: zk-client-tls
+                    mountPath: /opt/tls/client
+                    readOnly: true
+                  - name: zk-server-ca
+                    mountPath: /opt/tls/ca
+                    readOnly: true
+              volumes:
+                - name: checkpoint-volume
+                  persistentVolumeClaim:
+                    claimName: monolith-checkpoint-pvc
+                - name: zk-client-tls
+                  secret:
+                    secretName: monolith-zk-client
+                - name: zk-server-ca
+                  secret:
+                    secretName: my-cluster-cluster-ca-cert
+
+        Worker:
+          replicas: 2
+          restartPolicy: OnFailure
+          template:
+            spec:
+              containers:
+              - name: tensorflow
+                image: monolith:latest
+                imagePullPolicy: Never
+                command: ["python"]
+                args:
+                  - "/movie_online_model.py"
+                  - "--training_type=batch"
+                  - "--model_dir=/checkpoints/movie_lens_tutorial"
+                  - "--model_name=movie_lens_tutorial"
+                  - "--zk_server=$(ZK_SERVER)"
+                env:
+                  - name: POD_NAME
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.name
+                  - name: TF_CONFIG
+                    value: |
+                      {
+                        "cluster": {
+                          "worker": [
+                            "monolith-batch-worker-0.monolith-batch-worker.default.svc.cluster.local:2222",
+                            "monolith-batch-worker-1.monolith-batch-worker.default.svc.cluster.local:2222"
+                          ],
+                          "ps": [
+                            "monolith-batch-ps-0.monolith-batch-ps.default.svc.cluster.local:2223",
+                            "monolith-batch-ps-1.monolith-batch-ps.default.svc.cluster.local:2223"
+                          ]
+                        },
+                        "task": {"type": "worker", "index": 0}
+                      }
+                  # ZooKeeper TLS configuration
+                  - name: ZK_SERVER
+                    value: "my-cluster-zookeeper-client.default.svc.cluster.local:2181"
+                  - name: ZK_USE_SSL
+                    value: "true"
+                  - name: ZK_TRUST_FILE
+                    value: "/opt/tls/ca/ca.crt"
+                  - name: ZK_CERT_FILE
+                    value: "/opt/tls/client/client.crt"
+                  - name: ZK_KEY_FILE
+                    value: "/opt/tls/client/client.key"
+                resources:
+                  requests:
+                    cpu:  "500m"
+                    memory: "2Gi"
+                  limits:
+                    cpu:  "2"
+                    memory: "4Gi"
+                volumeMounts:
+                  - name: checkpoint-volume
+                    mountPath: /checkpoints
+                  - name: zk-client-tls
+                    mountPath: /opt/tls/client
+                    readOnly: true
+                  - name: zk-server-ca
+                    mountPath: /opt/tls/ca
+                    readOnly: true
+              volumes:
+                - name: checkpoint-volume
+                  persistentVolumeClaim:
+                    claimName: monolith-checkpoint-pvc
+                - name: zk-client-tls
+                  secret:
+                    secretName: monolith-zk-client
+                - name: zk-server-ca
+                  secret:
+                    secretName: my-cluster-cluster-ca-cert
+
+---
+# 2) RBAC so the scheduler can create TFJobs
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tfjob-scheduler-sa
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tfjob-scheduler-role
+rules:
+  - apiGroups: ["kubeflow.org"]
+    resources: ["tfjobs"]
+    verbs: ["create","get","list","watch","patch","update","delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tfjob-scheduler-binding
+subjects:
+  - kind: ServiceAccount
+    name: tfjob-scheduler-sa
+roleRef:
+  kind: Role
+  name: tfjob-scheduler-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# 3) CronJob that applies the above TFJob every 24h
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: monolith-tfjob-scheduler
+spec:
+  schedule: "0 0 * * *"             # daily at midnight UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: tfjob-scheduler-sa
+          restartPolicy: OnFailure
+          containers:
+          - name: kubectl
+            image: bitnami/kubectl:latest
+            command:
+              - sh
+              - -c
+              - |
+                echo "Applying Monolith TFJob manifest…"
+                kubectl apply -f /manifests/tfjob.yaml
+            volumeMounts:
+              - name: tfjob-manifest
+                mountPath: /manifests
+          volumes:
+            - name: tfjob-manifest
+              configMap:
+                name: monolith-tfjob-cm
+                items:
+                  - key: tfjob.yaml
+                    path: tfjob.yaml
