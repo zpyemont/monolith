@@ -10,7 +10,7 @@ ENV HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
 ENV PATH=$HADOOP_HOME/bin:$PATH
 
 # Copy necessary scripts and configs
-COPY markdown/demo/movie_online_model.py /movie_online_model.py
+COPY ./movie_online_model.py /movie_online_model.py
 COPY markdown/demo/ml_dataset.py /ml_dataset.py
 COPY markdown/demo/kafka_receiver.py /kafka_receiver.py
 # Optionally remove or keep demo_local_runner.py if not needed
@@ -40,6 +40,8 @@ ENV MONOLITH_TFS_BINARY=/output/tensorflow_model_server.runfiles/__main__/extern
 
 # Prepare checkpoint directory (if using warm-start)
 RUN mkdir -p /checkpoints && chmod 777 /checkpoints
+
+COPY ./monolith/native_training/zk_utils.py /usr/local/lib/python3.8/site-packages/monolith/native_training/zk_utils.py
 
 # Production ENTRYPOINT: run demo_model.py
 ENTRYPOINT ["python3", "/movie_online_model.py"]
