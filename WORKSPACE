@@ -1,9 +1,12 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
+load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 http_archive(
     name = "rules_python",
-    sha256 = "b6d46438523a3ec0f3cead544190ee13223a52f6a6765a29eae7b7cc24cc83a0",
-    url = "https://github.com/bazelbuild/rules_python/releases/download/0.1.0/rules_python-0.1.0.tar.gz",
+    sha256 = "778197e26c5fbeb07ac2a2c5ae405b30f6cb7ad1f5510ea6fdac03bded96cc6f",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/rules_python/releases/download/0.2.0/rules_python-0.2.0.tar.gz",
+        "https://github.com/bazelbuild/rules_python/releases/download/0.2.0/rules_python-0.2.0.tar.gz",
+    ],
 )
 
 http_archive(
@@ -23,6 +26,9 @@ load("//monolith:monolith_workspace.bzl", "monolith_workspace")
 
 monolith_workspace()
 
+# Load and install Python dependencies
+load("@pip_deps//:requirements.bzl", "install_deps")  # Make sure to load the macro from the correct path
+install_deps()  # This will install the dependencies defined in the requirements_lock
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
 # This is an unofficial boost build but it is useful.
@@ -93,6 +99,7 @@ bazel_toolchains_repositories()
 # START: Upstream TensorFlow dependencies
 # TensorFlow build depends on these dependencies.
 # Needs to be in-sync with TensorFlow sources.
+
 http_archive(
     name = "io_bazel_rules_closure",
     sha256 = "5b00383d08dd71f28503736db0500b6fb4dda47489ff5fc6bed42557c07c6ba9",

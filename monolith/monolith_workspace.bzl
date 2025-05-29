@@ -1,9 +1,11 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
-load("@rules_python//python:pip.bzl", "pip_install")
+load("@rules_python//python:pip.bzl", "pip_install", "pip_parse")
 
 def monolith_workspace():
     """Adds monolith workspace's dependencies."""
+
+    # Adding msgpack dependency
     http_archive(
         name = "msgpack",
         build_file = "//third_party:msgpack/msgpack.BUILD",
@@ -12,12 +14,14 @@ def monolith_workspace():
         urls = ["https://github.com/msgpack/msgpack-c/releases/download/cpp-3.3.0/msgpack-3.3.0.tar.gz"],
     )
 
-    pip_install(
+    # Parsing Python dependencies from the lock file
+    pip_parse(
         name = "pip_deps",
-        requirements = "//third_party/pip_deps:requirements.txt",
+        requirements_lock = "//third_party/pip_deps:requirements_lock.txt",
         python_interpreter = "python3",
     )
 
+    # Adding gperftools dependency
     http_archive(
         name = "gperftools",
         build_file = "//third_party:gperftools/gperftools.BUILD",
@@ -29,4 +33,3 @@ def monolith_workspace():
         patch_args = ["-p1"],
         strip_prefix = "gperftools-2.7",
     )
-

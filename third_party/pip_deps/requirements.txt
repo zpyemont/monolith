@@ -30,3 +30,4 @@ pyarrow==9.0.0
 pandas==1.4.4
 tensorboard==2.8.0
 #mpi4py==3.0.3
+setuptools==49.2.1
