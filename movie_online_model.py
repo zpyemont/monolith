@@ -15,6 +15,20 @@ from monolith.native_training.runner_utils import RunnerConfig
 from monolith.native_training.service_discovery import ServiceDiscoveryType
 from monolith.native_training.native_model import MonolithModel
 from monolith.native_training.data.datasets import create_plain_kafka_dataset
+# Import ExportMode for configuring export mode
+from monolith.native_training.model_export.export_context import ExportMode
+# Import Monolith operations to ensure they are loaded during training and export
+from monolith.native_training.runtime.ops import gen_monolith_ops
+
+# Import agent controller for model registration
+try:
+    from monolith.agent_service.backends import ZKBackend
+    # Import specific functions to avoid flag conflicts
+    from monolith.agent_service.agent_controller import declare_saved_model, map_model_to_layout
+    AGENT_CONTROLLER_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Agent controller not available: {e}")
+    AGENT_CONTROLLER_AVAILABLE = False
 
 #kafka flags are already defined by absl
 flags.DEFINE_enum('training_type', 'online', ['batch', 'online', 'stdin'],
@@ -40,6 +54,7 @@ class MovieRankingModelBase(MonolithModel):
         super().__init__(params)
         # enable export on checkpoint save for serving
         self.p.serving.export_when_saving = True
+        # Let Monolith automatically choose the appropriate export mode
 
     def model_fn(self, features, mode):
         # declare embedding tables for sparse features
@@ -208,6 +223,63 @@ class MovieRankingBatchStdin(MovieRankingModelBase):
         ).batch(512, drop_remainder=True).map(to_ragged).prefetch(tf.data.AUTOTUNE)
 
 
+def register_model_after_training(model_name="movie_lens_tutorial", 
+                                  export_base="/checkpoints/movie_lens_tutorial/exported_models", 
+                                  layout="test", 
+                                  bzid="monolith_serving_test"):
+    """Register the trained model with ZooKeeper for serving."""
+    if not AGENT_CONTROLLER_AVAILABLE:
+        logging.warning("Agent controller not available - skipping model registration")
+        return False
+        
+    try:
+        # Get ZooKeeper server from FLAGS
+        zk_servers = FLAGS.zk_server
+        logging.info(f"Registering model {model_name} with ZooKeeper at {zk_servers}")
+        
+        # Create ZK backend with proper TLS configuration
+        bd = ZKBackend(bzid, zk_servers)
+        bd.start()
+        
+        try:
+            # Declare the saved models
+            logging.info(f"Declaring saved models from {export_base}")
+            declare_saved_model(
+                bd, 
+                export_base, 
+                model_name,
+                overwrite=True,
+                arch="entry_ps"
+            )
+            
+            # List declared models for verification
+            saved_models = bd.list_saved_models(model_name)
+            logging.info(f"Found saved models: {saved_models}")
+            
+            # Publish models to layout
+            layout_path = f"/{bzid}/layouts/{layout}"
+            logging.info(f"Publishing models to layout {layout_path}")
+            
+            map_model_to_layout(
+                bd, 
+                f"{model_name}:*", 
+                layout_path, 
+                action="pub"
+            )
+            
+            logging.info("✅ Model registration completed successfully!")
+            return True
+            
+        finally:
+            bd.stop()
+            
+    except Exception as e:
+        logging.error(f"❌ Failed to register model: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def main(_argv):
     tf.compat.v1.disable_eager_execution()
 
@@ -253,7 +325,9 @@ def main(_argv):
         num_workers=get_worker_count(tf_conf),
         server_type=tf_conf.get('task', {}).get('type', ''),
         index=tf_conf.get('task', {}).get('index', 0), 
-        zk_server=FLAGS.zk_server
+        zk_server=FLAGS.zk_server, 
+        base_name="movie_lens",
+        bzid="monolith_serving_test"
     )
 
     # instantiate model params based on training type
@@ -265,11 +339,29 @@ def main(_argv):
         # online streaming mode
         params = MovieRankingOnlineTraining.params().instantiate()
         # enable real-time parameter sync to serving PS
-        config.enable_parameter_sync = True
+        config.enable_realtime_training = True
 
     # build estimator and train
     estimator = Estimator(params, config)
     estimator.train(max_steps=1000000)
+
+    # Register model after batch training completes (only for primary worker)
+    if FLAGS.training_type == 'batch':
+        # Only register from one worker to avoid conflicts
+        task_type = tf_conf.get('task', {}).get('type', '')
+        task_index = tf_conf.get('task', {}).get('index', 0)
+        
+        # Register models from worker:0 or if no distributed setup
+        if task_type == 'worker' and task_index == 0:
+            logging.info("Primary worker - registering model with ZooKeeper")
+            register_model_after_training()
+        elif not task_type:  # single-node training
+            logging.info("Single-node training - registering model with ZooKeeper")
+            register_model_after_training()
+        else:
+            logging.info(f"Worker {task_type}:{task_index} - skipping model registration (primary worker will handle it)")
+    else:
+        logging.info(f"Training type {FLAGS.training_type} - skipping model registration")
 
 
 if __name__ == '__main__':
