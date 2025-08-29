@@ -57,20 +57,23 @@ class TFSWrapper(object):
     flags.append(f"--rest_api_port={self._http_port}")
     flags.append("--model_config_file_poll_wait_seconds=60")
 
-    psm = os.environ.get("TCE_PSM", "")
-    cluster = os.environ.get("TCE_CLUSTER", "")
-    prefix = psm
-    flags.append(f"--archon_port={self._archon_port}")
-    flags.append(f"--archon_rpc_psm={psm}")
-    flags.append(f"--archon_rpc_cluster={cluster}")
-    flags.append(f"--metrics_namespace_prefix={prefix}")
+    # Only add archon-specific arguments if this is a Monolith-customized binary
+    # Standard TensorFlow Serving doesn't support these arguments
+    # _is_grpc_remote_op is True for standard TFS, False for Monolith TFS
     if not self._is_grpc_remote_op:
+      psm = os.environ.get("TCE_PSM", "")
+      cluster = os.environ.get("TCE_CLUSTER", "")
+      prefix = psm
+      flags.append(f"--archon_port={self._archon_port}")
+      flags.append(f"--archon_rpc_psm={psm}")
+      flags.append(f"--archon_rpc_cluster={cluster}")
+      flags.append(f"--metrics_namespace_prefix={prefix}")
       flags.append(
           f'--archon_entry_to_ps_rpc_timeout={self._binary_config.fetch_ps_timeout_ms}'
       )
-    # set some dummy config for archon
-    flags.append("--conf_file=conf/service.conf")
-    flags.append("--log_conf=conf/log4j.properties")
+      # set some dummy config for archon
+      flags.append("--conf_file=conf/service.conf")
+      flags.append("--log_conf=conf/log4j.properties")
 
     for key, clz in get_type_hints(TfServingConfig).items():
       default = getattr(TfServingConfig, key)
@@ -78,7 +81,9 @@ class TFSWrapper(object):
       if key == 'platform_config_file':
         platform_config_file = value or default
         if platform_config_file is None:
-          flags.append('--platform_config_file=conf/platform_config_file.cfg')
+          # Only add platform config if it's a Monolith binary
+          if not self._is_grpc_remote_op:
+            flags.append('--platform_config_file=conf/platform_config_file.cfg')
         else:
           flags.append(f'--{key}={platform_config_file}')
       elif value != default:
