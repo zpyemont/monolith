@@ -133,6 +133,7 @@ class MovieRankingOnlineTraining(MovieRankingModelBase):
         if os.environ.get('KAFKA_SECURITY_PROTOCOL') == 'SSL':
             kafka_config.extend([
                 f"ssl.ca.location={os.environ.get('KAFKA_SSL_CA_LOCATION', '')}",
+                f"ssl.certificate.location={os.environ.get('KAFKA_SSL_CA_LOCATION', '')}",
                 f"ssl.certificate.location={os.environ.get('KAFKA_SSL_CERTIFICATE_LOCATION', '')}",
                 f"ssl.key.location={os.environ.get('KAFKA_SSL_KEY_LOCATION', '')}"
             ])
@@ -143,68 +144,12 @@ class MovieRankingOnlineTraining(MovieRankingModelBase):
             group_id=FLAGS.kafka_group_id,
             servers=FLAGS.kafka_servers,
             stream_timeout=FLAGS.stream_timeout_ms,
-            poll_batch_size=FLAGS.poll_batch_size,
+            poll_batch_size=16,  # Match demo size
             configuration=kafka_config
         )
         
-        # Process Kafka messages and handle empty queue
-        def process_kafka_message(message_batch):
-            # Add debugging information
-            logging.info(f"Processing message batch with shape: {message_batch.message.shape}")
-            
-            # Check if batch is empty (EOF or timeout)
-            if message_batch.message.shape[0] == 0:
-                logging.info(f"Empty Kafka batch detected - process is running and waiting for data (empty count: {self._empty_queue_count})")
-                self._empty_queue_count += 1
-                
-                # Log less frequently after initial startup
-                if self._empty_queue_count % 100 == 0:
-                    logging.info(f"Still waiting for data... (empty batches: {self._empty_queue_count})")
-                
-                # Return placeholder data to keep training alive
-                return {
-                    'mov': tf.RaggedTensor.from_tensor(tf.constant([[1]], dtype=tf.int64)),
-                    'uid': tf.RaggedTensor.from_tensor(tf.constant([[1]], dtype=tf.int64)),
-                    'label': tf.constant([0.0], dtype=tf.float32)
-                }
-            else:
-                # Process real data
-                logging.info(f"🎉 REAL DATA ARRIVED! Processing Kafka batch with {message_batch.message.shape[0]} messages")
-                try:
-                    decoded = decode_example(message_batch.message)
-                    logging.info(f"Successfully decoded {message_batch.message.shape[0]} examples - training on real data!")
-                    return decoded
-                except Exception as e:
-                    logging.error(f"Failed to decode Kafka messages: {e}")
-                    # Return placeholder data on decode error
-                    return {
-                        'mov': tf.RaggedTensor.from_tensor(tf.constant([[1]], dtype=tf.int64)),
-                        'uid': tf.RaggedTensor.from_tensor(tf.constant([[1]], dtype=tf.int64)),
-                        'label': tf.constant([0.0], dtype=tf.float32)
-                    }
-                
-        # Map to process messages and handle empty batches
-        processed_dataset = dataset.map(process_kafka_message).map(to_ragged)
-        
-        # Make the dataset infinite for startup scenario - no concatenation needed
-        # The Kafka dataset will keep producing placeholder data when empty
-        infinite_dataset = processed_dataset.repeat()
-        
-        # Add minimum batch size handling if enabled  
-        if FLAGS.skip_empty_batches or FLAGS.min_batch_size > 1:
-            # Filter out batches that are too small
-            def is_sufficient_batch(features):
-                batch_size = tf.shape(features['label'])[0]
-                if FLAGS.skip_empty_batches:
-                    # Skip single-example placeholder batches
-                    return tf.greater(batch_size, 1)
-                else:
-                    # Use configured minimum batch size
-                    return tf.greater_equal(batch_size, FLAGS.min_batch_size)
-            
-            infinite_dataset = infinite_dataset.filter(is_sufficient_batch)
-        
-        return infinite_dataset.prefetch(tf.data.AUTOTUNE)
+        # Kafka provides correct format - use original decode_example  
+        return dataset.map(lambda x: decode_example(x.message)).map(to_ragged)
 
 
 class MovieRankingBatchStdin(MovieRankingModelBase):
