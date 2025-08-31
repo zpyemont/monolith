@@ -16,7 +16,7 @@ COPY markdown/demo/kafka_receiver.py /kafka_receiver.py
 # Optionally remove or keep demo_local_runner.py if not needed
 # COPY markdown/demo/demo_local_runner.py /demo_local_runner.py
 COPY demo.conf /demo.conf
-COPY monolith/agent_service/agent_controller.py /agent_controller.py
+COPY monolith/agent_service/agent_controller.py /usr/local/lib/python3.8/site-packages/monolith/agent_service/agent_controller.py
 COPY train_and_register_model.sh /train_and_register_model.sh
 COPY conf/platform_config_file.cfg /conf/platform_config_file.cfg
 
@@ -33,15 +33,16 @@ RUN wget -q https://github.com/frekele/oracle-java/releases/download/8u201-b09/j
 RUN wget -q https://dlcdn.apache.org/hadoop/common/hadoop-3.3.6/hadoop-3.3.6.tar.gz && \
     tar -xzf hadoop-3.3.6.tar.gz && mv hadoop-3.3.6 /usr/lib/hadoop && rm hadoop-3.3.6.tar.gz
 
-# TF Serving: copy necessary files
-COPY output /output
+# TF Serving: copy necessary files from extracted artifacts
+COPY extracted_artifacts /output
 
-ENV MONOLITH_TFS_BINARY=/output/tensorflow_model_server.runfiles/__main__/external/org_tensorflow_serving/tensorflow_serving/model_servers/tensorflow_model_server
+ENV MONOLITH_TFS_BINARY=/output/bin/tensorflow_model_server
 
 # Prepare checkpoint directory (if using warm-start)
 RUN mkdir -p /checkpoints && chmod 777 /checkpoints
 
 COPY ./monolith/native_training/zk_utils.py /usr/local/lib/python3.8/site-packages/monolith/native_training/zk_utils.py
+COPY ./monolith/agent_service/tfs_wrapper.py /usr/local/lib/python3.8/site-packages/monolith/agent_service/tfs_wrapper.py
 
 # Production ENTRYPOINT: run demo_model.py
 ENTRYPOINT ["python3", "/movie_online_model.py"]
