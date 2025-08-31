@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package com.looksy.flinkjoiner.proto;
+option java_multiple_files = true;
+
+message TrainingSample {
+    int64 requestId = 1;
+    string featureData = 2;
+    string actionData = 3;
+    int64 featureEventTime = 4;
+    int64 actionEventTime = 5;
+}

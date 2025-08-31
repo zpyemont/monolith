@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package com.looksy.flinkjoiner.proto;
+option java_multiple_files = true;
+
+message FeatureEvent {
+    int64 requestId = 1;
+    int64 eventTime = 2; // epoch millis
+    string featureData = 3;
+}
