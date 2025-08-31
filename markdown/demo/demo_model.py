@@ -41,11 +41,12 @@ class MovieRankingModelBase(MonolithModel):
   def __init__(self, params):
     super().__init__(params)
     self.p = params
+    self.p.serving.export_when_saving = True
 
   def model_fn(self, features, mode):
     # for sparse features, we declare an embedding table for each of them
     for s_name in ["mov", "uid"]:
-      self.create_embedding_feature_column(s_name)
+      self.create_embedding_feature_column(s_name, occurrence_threshold=0)
 
     mov_embedding, user_embedding = self.lookup_embedding_slice(
       features=['mov', 'uid'], slice_name='vec', slice_dim=32)
@@ -71,10 +72,25 @@ class MovieRankingModelBase(MonolithModel):
       optimizer=optimizer,
       classification=False
     )
-    
+  
+  
   def serving_input_receiver_fn(self):
-    # a dummy serving input receiver
-    return tf.estimator.export.ServingInputReceiver({})
+    input_placeholder = tf.compat.v1.placeholder(dtype=tf.string,
+                                                shape=(None,))
+    receiver_tensors = {'examples': input_placeholder}
+    raw_feature_desc = {
+      'mov': tf.io.FixedLenFeature([1], tf.int64),
+      'uid': tf.io.FixedLenFeature([1], tf.int64),
+      'label': tf.io.FixedLenFeature([], tf.float32)
+    }
+    examples = tf.io.parse_example(input_placeholder, raw_feature_desc)
+    parsed_features = {
+      'mov': tf.RaggedTensor.from_tensor(examples['mov']),
+      'uid': tf.RaggedTensor.from_tensor(examples['uid']),
+      'label': examples['label']
+    }
+
+    return tf.estimator.export.ServingInputReceiver(parsed_features, receiver_tensors)
 
 class MovieRankingBatchTraining(MovieRankingModelBase):
   def input_fn(self, mode):
@@ -127,18 +143,37 @@ FLAGS = flags.FLAGS
 
 def main(_):
   tf.compat.v1.disable_eager_execution()
-  raw_tf_conf = os.environ['TF_CONFIG']
-  tf_conf = json.loads(raw_tf_conf)
+  # Read the TF_CONFIG from the environment
+  raw_tf_conf = os.environ.get('TF_CONFIG', '{}')
+  try:
+    tf_conf = json.loads(raw_tf_conf)
+  except json.JSONDecodeError:
+    tf_conf = {}
+
+  # If POD_NAME is set, override the task index using the pod's ordinal
+  pod_name = os.environ.get('POD_NAME')
+  if pod_name:
+    try:
+      # Assuming pod name format is something like "monolith-batch-ps-0"
+      ordinal = int(pod_name.split('-')[-1])
+      tf_conf['task']['index'] = ordinal
+      # Update raw_tf_conf to reflect the override
+      raw_tf_conf = json.dumps(tf_conf)
+      logging.info("Overriding TF_CONFIG task index with ordinal %d from POD_NAME %s", ordinal, pod_name)
+    except Exception as e:
+      logging.error("Error parsing POD_NAME %s: %s", pod_name, e)
+  
   config = RunnerConfig(
       discovery_type=ServiceDiscoveryType.PRIMUS,
       tf_config=raw_tf_conf,
       save_checkpoints_steps=10000,
       enable_model_ckpt_info=True,
-      num_ps=len(tf_conf['cluster']['ps']),
+      num_ps=len(tf_conf.get('cluster', {}).get('ps', [])),
       num_workers=get_worker_count(tf_conf),
-      server_type=tf_conf['task']['type'],
-      index=tf_conf['task']['index']
+      server_type=tf_conf.get('task', {}).get('type', ''),
+      index=tf_conf.get('task', {}).get('index', 0)
   )
+
   if FLAGS.training_type == "batch":
     params = MovieRankingBatchTraining.params().instantiate()
   elif FLAGS.training_type == "stdin":
