@@ -1,0 +1,35 @@
+FROM ubuntu:20.04
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt update && apt -y install wget g++ unzip zip
+
+RUN wget https://github.com/bazelbuild/bazel/releases/download/3.1.0/bazel-3.1.0-installer-linux-x86_64.sh && \
+  chmod +x bazel-3.1.0-installer-linux-x86_64.sh && ./bazel-3.1.0-installer-linux-x86_64.sh && \
+   rm bazel-3.1.0-installer-linux-x86_64.sh
+
+RUN apt update -y && apt upgrade -y && \
+    apt-get install -y wget build-essential libncursesw5-dev  libssl-dev  libsqlite3-dev tk-dev libgdbm-dev libc6-dev libbz2-dev libffi-dev zlib1g-dev automake libtool  && \
+    cd /usr/src && \
+    wget https://www.python.org/ftp/python/3.8.6/Python-3.8.6.tgz && \
+    tar xzf Python-3.8.6.tgz && \
+    cd Python-3.8.6 && \
+    ./configure --enable-optimizations && \
+    make altinstall
+
+RUN set -xe \
+    && apt-get update -y \
+    && apt-get install -y python3-pip git && \
+    ln -s /usr/bin/python3 /usr/bin/python
+
+COPY . .
+
+RUN pip3 install -U --user pip numpy==1.19.4 wheel packaging requests opt_einsum tensorflow_estimator==2.4.0 tensorflow_datasets && \ 
+    pip3 install -U --user keras_preprocessing --no-deps
+
+RUN bazel run -j 4 //monolith/native_training:demo --output_filter=IGNORE_LOGS --verbose_failures
+
+RUN wget https://raw.githubusercontent.com/protocolbuffers/protobuf/main/python/google/protobuf/internal/builder.py -O /usr/local/lib/python3.8/dist-packages/google/protobuf/internal/builder.py
+
+
+
+CMD ["sleep", "infinity"]
