@@ -14,7 +14,7 @@ RUN set -eux; \
 
 # install java
 RUN set -eux; \
-    wget -qO - https://adoptopenjdk.jfrog.io/adoptopenjdk/api/gpg/key/public | apt-key add - ; \
+    wget -qO --no-check-certificate - https://adoptopenjdk.jfrog.io/adoptopenjdk/api/gpg/key/public | apt-key add - ; \
     add-apt-repository --yes https://adoptopenjdk.jfrog.io/adoptopenjdk/deb/; \
     apt-get update; \
     apt-get install -y --no-install-recommends adoptopenjdk-8-hotspot
@@ -207,7 +207,7 @@ ENV NVIDIA_REQUIRE_CUDA "cuda>=11.0 brand=tesla,driver>=418,driver<419 brand=tes
 
 # hadoop
 RUN wget -q https://mirrors.aliyun.com/apache/hadoop/common/hadoop-3.3.2/hadoop-3.3.2.tar.gz && \
-    tar -xzf hadoop-3.3.2.tar.gz && mv hadoop-3.3.2 /opt/tiger/hadoop && rm hadoop-3.3.2.tar.gz
+    tar -xzf hadoop-3.3.2.tar.gz && mv hadoop-3.3.2 /usr/lib/hadoop && rm hadoop-3.3.2.tar.gz
 
 ENV HADOOP_HOME /opt/tiger/hadoop/
 ENV HDFS_JDK ${JAVA_HOME}
@@ -222,3 +222,10 @@ RUN printf "\nexport PATH=${JAVA_HOME}/bin:${CUDA_HOME}/bin:$HADOOP_HOME/sbin:$H
 
 
 # ADD monolith_serving /opt/tiger/monolith_serving
+ADD monolith_serving ../../../bazel-out/
+ADD monolith_serving ../../../monolith
+ADD monolith_serving ../open_source_serving.sh
+
+RUN chmod +x monolith_serving/open_source_serving.sh
+
+CMD ["/bin/bash", "/monolith_serving/open_source_serving.sh"]
