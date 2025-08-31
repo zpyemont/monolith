@@ -35,6 +35,7 @@ var/
 .installed.cfg
 *.egg
 output/
+extracted_artifacts/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
