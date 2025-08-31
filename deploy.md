@@ -76,13 +76,21 @@ Extra:
 
 Minikube use local docker image: 
 
-eval $(minikube docker-env)
+eval $(minikube docker-env) && \
 docker build -t monolith .
+
+create one off batch job:
+kubectl create job \
+  --from=cronjob/monolith-tfjob-scheduler \
+  monolith-tfjob-test
 
 Model loading:
 https://chatgpt.com/c/67f44635-e5a4-8007-b898-60ce3ce100c1
 
 Connections between online and serving:
 https://chatgpt.com/c/67f6ed07-4b4c-8007-a649-e4a10e8168f4
+
+Fashion model:
+https://chatgpt.com/c/67fd8e6e-9cdc-8007-adcb-bb6e32dcc323
 
 
