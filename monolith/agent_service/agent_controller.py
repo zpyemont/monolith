@@ -25,16 +25,7 @@ from monolith.native_training import env_utils
 from monolith.agent_service.backends import CtrlBackend, ZKBackend, SavedModel, SavedModelDeployConfig
 
 SUPPORTED_CMDS = "decl|pub|unpub|bzid_info"
-flags.DEFINE_string(
-    "zk_servers",
-    "",
-    "zk connection string")
-flags.DEFINE_string("bzid", "test", "namespace")
-flags.DEFINE_string("export_base", "", "exported model base path")
-flags.DEFINE_integer("overwrite", 0, "overwrite existing saved_model configs")
-flags.DEFINE_string("model_name", "", "model_name")
-flags.DEFINE_string("layout", "", "layout base")
-flags.DEFINE_string("arch", "entry_ps", "serving architecture")
+# Only keep cmd flag for module compatibility, all others are only used in main()
 flags.DEFINE_string("cmd", "bzid_info", SUPPORTED_CMDS)
 
 FLAGS = flags.FLAGS
@@ -81,7 +72,7 @@ def declare_saved_model(bd: CtrlBackend,
   for sub_graph in sub_graphs:
     deploy_config = SavedModelDeployConfig(
         model_base_path=os.path.join(export_base, sub_graph),
-        version_policy='latest' if sub_graph == 'entry' else 'latest_once')
+        version_policy='latest')
     bd.decl_saved_model(SavedModel(model_name, sub_graph), deploy_config)
   logging.info(
       f"declare saved_model for {model_name} on path {export_base} success")
