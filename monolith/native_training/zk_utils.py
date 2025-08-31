@@ -59,7 +59,7 @@ class MonolithKazooClient(KazooClient):
             kwargs["auth_data"] = get_zk_auth_data()
 
         # --- inject SSL/TLS settings from env ---
-        # Expect you’ve mounted Strimzi’s CA to /opt/zookeeper/certs/ca.crt
+        # Expect you've mounted Strimzi's CA to /opt/zookeeper/certs/ca.crt
         ca_path = os.environ.get("ZK_TRUST_FILE")
         use_ssl = os.environ.get("ZK_USE_SSL", "false").lower() in ("1", "true")
         if use_ssl and ca_path:
@@ -73,6 +73,14 @@ class MonolithKazooClient(KazooClient):
             kwargs["certfile"] = certfile
         if keyfile:
             kwargs["keyfile"]  = keyfile
+
+        # --- inject timeout settings from env ---
+        session_timeout_ms = os.environ.get("ZK_SESSION_TIMEOUT_MS")
+        if session_timeout_ms and "timeout" not in kwargs:
+            kwargs["timeout"] = float(session_timeout_ms) / 1000.0  # Convert to seconds
+            
+        # Note: Kazoo doesn't have a separate connection_timeout parameter
+        # The timeout parameter controls both session and connection timeouts
         # -------------------------------------
 
         # now call the real KazooClient init
