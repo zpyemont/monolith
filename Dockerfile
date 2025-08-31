@@ -44,7 +44,6 @@ RUN mkdir -p /checkpoints && chmod 777 /checkpoints
 COPY ./monolith/native_training/zk_utils.py /usr/local/lib/python3.8/site-packages/monolith/native_training/zk_utils.py
 COPY ./monolith/agent_service/tfs_wrapper.py /usr/local/lib/python3.8/site-packages/monolith/agent_service/tfs_wrapper.py
 
-# Production ENTRYPOINT: run demo_model.py
 ENTRYPOINT ["python3", "/movie_online_model.py"]
 # Default to batch training mode; adjust CMD as needed for online training
 CMD ["--training_type=batch"]
