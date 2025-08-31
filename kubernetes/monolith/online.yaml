@@ -47,6 +47,7 @@ spec:
       - name: ps
         image: monolith:latest
         imagePullPolicy: Never
+        command: ["python", "movie_online_model.py"]
         args:
           - "--training_type=online"
           - "--kafka_topics=training-sample-topic"
@@ -141,6 +142,7 @@ spec:
       - name: worker
         image: monolith:latest
         imagePullPolicy: Never
+        command: ["python", "movie_online_model.py"]
         args:
           - "--training_type=online"
           - "--kafka_topics=training-sample-topic"
