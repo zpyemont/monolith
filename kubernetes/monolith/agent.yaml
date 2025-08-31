@@ -1,0 +1,114 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: monolith-serving-ps
+spec:
+  type: NodePort             # Changed from LoadBalancer to NodePort
+  selector:
+    app: monolith-serving-ps
+  ports:
+    - name: grpc
+      port: 2223
+      targetPort: 2223
+      nodePort: 30223          # Optional: specify a specific NodePort
+
+---
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: monolith-serving-ps
+spec:
+  serviceName: monolith-serving-ps
+  replicas: 2
+  selector:
+    matchLabels:
+      app: monolith-serving-ps
+  template:
+    metadata:
+      labels:
+        app: monolith-serving-ps
+    spec:
+      containers:
+      - name: agent
+        image: monolith:latest
+        imagePullPolicy: Never
+        command: ["python", "agent.py"]
+        args:
+          - "--conf=./demo.conf"
+        env:
+          - name: ZK_SERVER
+            value: my-cluster-zookeeper-client.default.svc.cluster.local:2181
+          - name: ZK_USE_SSL
+            value: "true"
+          - name: ZK_TRUST_FILE
+            value: "/opt/tls/ca/ca.crt"
+          - name: ZK_CERT_FILE
+            value: "/opt/tls/client/client.crt"
+          - name: ZK_KEY_FILE
+            value: "/opt/tls/client/client.key"
+          # ZooKeeper session timeout settings
+          - name: ZK_SESSION_TIMEOUT_MS
+            value: "60000"  # 60 seconds (default is usually 30s)
+          - name: ZK_CONNECTION_TIMEOUT_MS
+            value: "30000"  # 30 seconds
+          # Port configuration for the agent
+          - name: PORT
+            value: "9090"     # archon port
+          - name: PORT2
+            value: "8502"     # agent heartbeat port
+          - name: PORT3
+            value: "2223"     # gRPC port (main serving port)
+          - name: PORT4
+            value: "8501"     # HTTP REST API port
+          # Debug environment variables
+          - name: TF_CPP_MIN_LOG_LEVEL
+            value: "0"        # Enable verbose TensorFlow logging
+          - name: TF_CPP_VMODULE
+            value: "prediction_service=3,saved_model=3"  # Verbose prediction logging
+          - name: GRPC_VERBOSITY
+            value: "DEBUG"    # Enable gRPC debug logs
+          # TensorFlow Serving binary path
+          - name: MONOLITH_TFS_BINARY
+            value: "/output/tensorflow_model_server.runfiles/__main__/external/org_tensorflow_serving/tensorflow_serving/model_servers/tensorflow_model_server"
+        ports:
+          - containerPort: 2223
+            name: grpc
+          - containerPort: 8501
+            name: http
+          - containerPort: 9090
+            name: archon
+        # Health checks to detect when agent is not responding
+        livenessProbe:
+          tcpSocket:
+            port: 2223
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          tcpSocket:
+            port: 2223
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        volumeMounts:
+          - name: checkpoint-volume
+            mountPath: /checkpoints
+          - name: zk-client-tls
+            mountPath: /opt/tls/client
+            readOnly: true
+          - name: zk-server-ca
+            mountPath: /opt/tls/ca
+            readOnly: true
+      volumes:
+        - name: checkpoint-volume
+          persistentVolumeClaim:
+            claimName: monolith-checkpoint-pvc
+        - name: zk-client-tls
+          secret:
+            secretName: monolith-zk-client
+        - name: zk-server-ca
+          secret:
+            secretName: my-cluster-cluster-ca-cert
