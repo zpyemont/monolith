@@ -21,6 +21,7 @@ else
   bazel build \
     --output_filter=DONT_MATCH_ANYTHING \
     --define=framework_shared_object=false \
+    -j 4 \
     @org_tensorflow_serving//tensorflow_serving/model_servers:tensorflow_model_server
 fi
 
@@ -34,6 +35,7 @@ bazel build \
 bazel build \
   --output_filter=DONT_MATCH_ANYTHING \
   --define=framework_shared_object=false \
+  -j 4 \
   //monolith/agent_service:tfs_client
 
 # 1) prepare output
