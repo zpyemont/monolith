@@ -9,7 +9,7 @@ spec:
     ttlSecondsAfterFinished: 86400
   tfReplicaSpecs:
     PS:
-      replicas: 2
+      replicas: 1
       restartPolicy: OnFailure
       template:
         spec:
@@ -50,7 +50,7 @@ spec:
                 claimName: monolith-checkpoint-pvc
 
     Worker:
-      replicas: 2
+      replicas: 1
       restartPolicy: OnFailure
       template:
         spec:
