@@ -22,6 +22,12 @@ COPY conf/platform_config_file.cfg /conf/platform_config_file.cfg
 
 RUN ln -s /usr/local/lib/python3.8/site-packages/monolith/agent_service/agent.py /agent.py
 
+# Install TensorFlow I/O for BigQuery Storage API ingestion (compatible with TF 2.4.x)
+RUN python3 -m pip install --no-cache-dir \
+    tensorflow-io==0.17.0 \
+    google-cloud-bigquery \
+    google-cloud-bigquery-storage
+
 # Install Java
 RUN wget -q https://github.com/frekele/oracle-java/releases/download/8u201-b09/jdk-8u201-linux-x64.tar.gz && \
     mkdir /opt/jdk && \

@@ -47,18 +47,16 @@ spec:
       - name: ps
         image: monolith:latest
         imagePullPolicy: Never
-        command: ["python", "movie_online_model.py"]
+        command: ["python", "fashion_model.py"]
         args:
           - "--training_type=online"
           - "--kafka_topics=training-sample-topic"
-          - "--kafka_group_id=movie-online-group"
+          - "--kafka_group_id=fashion-online-group"
           - "--kafka_servers=$(KAFKA_BOOTSTRAP_SERVERS)"
-          - "--model_dir=/checkpoints/movie_lens_tutorial"
-          - "--model_name=movie_lens_tutorial"
-          - "--zk_server=$(ZK_SERVER)"
+          - "--model_dir=/checkpoints/fashion_ranking"
+          - "--model_name=fashion_ranking_model"
           - "--stream_timeout_ms=86400000"  # 24 hours
           - "--skip_empty_batches=false"    # Keep running with no data
-          - "--min_batch_size=1"            # Train on any real data
         env:
           # TF_CONFIG for distributed training
           - name: TF_CONFIG
@@ -75,17 +73,6 @@ spec:
           - name: KAFKA_SSL_KEY_LOCATION
             value: "/opt/kafka/user/user.key"
 
-          # ZooKeeper TLS (native)
-          - name: ZK_SERVER
-            value: "my-cluster-zookeeper-client.default.svc.cluster.local:2181"
-          - name: ZK_USE_SSL
-            value: "true"
-          - name: ZK_TRUST_FILE
-            value: "/opt/tls/ca/ca.crt"
-          - name: ZK_CERT_FILE
-            value: "/opt/tls/client/client.crt"
-          - name: ZK_KEY_FILE
-            value: "/opt/tls/client/client.key"
         ports:
           - containerPort: 2223
         volumeMounts:
@@ -97,12 +84,7 @@ spec:
           - name: kafka-user-tls
             mountPath: /opt/kafka/user
             readOnly: true
-          - name: zk-client-tls
-            mountPath: /opt/tls/client
-            readOnly: true
-          - name: zk-server-ca
-            mountPath: /opt/tls/ca
-            readOnly: true
+          # ZK volumes removed
 
       volumes:
         - name: checkpoint-volume
@@ -114,12 +96,7 @@ spec:
         - name: kafka-user-tls
           secret:
             secretName: monolith-user
-        - name: zk-client-tls
-          secret:
-            secretName: monolith-zk-client
-        - name: zk-server-ca
-          secret:
-            secretName: my-cluster-cluster-ca-cert
+        # ZK volumes removed
 
 ---
 # 5) StatefulSet for Worker (native ZK TLS)
@@ -142,18 +119,16 @@ spec:
       - name: worker
         image: monolith:latest
         imagePullPolicy: Never
-        command: ["python", "movie_online_model.py"]
+        command: ["python", "fashion_model.py"]
         args:
           - "--training_type=online"
           - "--kafka_topics=training-sample-topic"
-          - "--kafka_group_id=movie-online-group"
+          - "--kafka_group_id=fashion-online-group"
           - "--kafka_servers=$(KAFKA_BOOTSTRAP_SERVERS)"
-          - "--model_dir=/checkpoints/movie_lens_tutorial"
-          - "--model_name=movie_lens_tutorial"
-          - "--zk_server=$(ZK_SERVER)"
+          - "--model_dir=/checkpoints/fashion_ranking"
+          - "--model_name=fashion_ranking_model"
           - "--stream_timeout_ms=86400000"  # 24 hours
           - "--skip_empty_batches=false"    # Keep running with no data
-          - "--min_batch_size=1"            # Train on any real data
         env:
           # TF_CONFIG for distributed training
           - name: TF_CONFIG
@@ -170,17 +145,6 @@ spec:
           - name: KAFKA_SSL_KEY_LOCATION
             value: "/opt/kafka/user/user.key"
 
-          # ZooKeeper TLS
-          - name: ZK_SERVER
-            value: "my-cluster-zookeeper-client.default.svc.cluster.local:2181"
-          - name: ZK_USE_SSL
-            value: "true"
-          - name: ZK_TRUST_FILE
-            value: "/opt/tls/ca/ca.crt"
-          - name: ZK_CERT_FILE
-            value: "/opt/tls/client/client.crt"
-          - name: ZK_KEY_FILE
-            value: "/opt/tls/client/client.key"
         ports:
           - containerPort: 2222
         volumeMounts:
@@ -192,12 +156,7 @@ spec:
           - name: kafka-user-tls
             mountPath: /opt/kafka/user
             readOnly: true
-          - name: zk-client-tls
-            mountPath: /opt/tls/client
-            readOnly: true
-          - name: zk-server-ca
-            mountPath: /opt/tls/ca
-            readOnly: true
+          # ZK volumes removed
 
       volumes:
         - name: checkpoint-volume
@@ -209,9 +168,4 @@ spec:
         - name: kafka-user-tls
           secret:
             secretName: monolith-user
-        - name: zk-client-tls
-          secret:
-            secretName: monolith-zk-client
-        - name: zk-server-ca
-          secret:
-            secretName: my-cluster-cluster-ca-cert
+        # ZK volumes removed

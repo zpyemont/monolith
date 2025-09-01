@@ -1,0 +1,74 @@
+substitutions:
+  _REGION: us-central1
+  _IMAGE_NAME: monolith
+  _REPO: gcr.io/$PROJECT_ID/$_IMAGE_NAME
+  _K8S_NAMESPACE: default
+  # Movie batch-only deployment
+  _BQ_PROJECT: $PROJECT_ID
+  _BQ_DATASET: movie
+  _BQ_TABLE: training_examples
+  _BQ_LOCATION: US
+  _BQ_PARALLELISM: '4'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  # 1) Build image
+  - name: gcr.io/cloud-builders/docker
+    id: Build image
+    args: ["build", "-t", "$_REPO:$COMMIT_SHA", "."]
+
+  # 2) Push image
+  - name: gcr.io/cloud-builders/docker
+    id: Push image
+    args: ["push", "$_REPO:$COMMIT_SHA"]
+
+  # 3) Set kubectl context
+  - name: gcr.io/cloud-builders/gcloud
+    id: Get GKE credentials
+    args: ["container", "clusters", "get-credentials", "${_CLUSTER}", "--zone", "${_ZONE}", "--project", "$PROJECT_ID"]
+
+  # 4) Render TFJob manifest for movie batch training (BigQuery)
+  - name: gcr.io/cloud-builders/kubectl
+    id: Render TFJob manifest
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        sed \
+          -e "s#__IMAGE__#$_REPO:$COMMIT_SHA#g" \
+          -e "s#__BQ_PROJECT__#$_BQ_PROJECT#g" \
+          -e "s#__BQ_DATASET__#$_BQ_DATASET#g" \
+          -e "s#__BQ_TABLE__#$_BQ_TABLE#g" \
+          -e "s#__BQ_LOCATION__#$_BQ_LOCATION#g" \
+          -e "s#__BQ_PARALLELISM__#$_BQ_PARALLELISM#g" \
+          kubernetes/monolith/movie-batch-tfjob.yaml > /workspace/movie-batch-tfjob.rendered.yaml
+
+  # 5) Create/Update ConfigMap holding the rendered TFJob for the scheduler
+  - name: gcr.io/cloud-builders/kubectl
+    id: Create/Update TFJob ConfigMap
+    env:
+      - CLOUDSDK_COMPUTE_ZONE=${_ZONE}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        kubectl -n $_K8S_NAMESPACE create configmap movie-tfjob-cm \
+          --from-file=tfjob.yaml=/workspace/movie-batch-tfjob.rendered.yaml \
+          --dry-run=client -o yaml | kubectl -n $_K8S_NAMESPACE apply -f -
+
+  # 6) Apply the scheduler CronJob/RBAC to run nightly
+  - name: gcr.io/cloud-builders/kubectl
+    id: Apply TFJob CronJob
+    env:
+      - CLOUDSDK_COMPUTE_ZONE=${_ZONE}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
+    args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "kubernetes/monolith/movie-batch-cronjob.yaml"]
+
+images:
+  - "$_REPO:$COMMIT_SHA"
+
+timeout: "1200s"
+
