@@ -3,6 +3,8 @@ substitutions:
   _IMAGE_NAME: monolith
   _REPO: gcr.io/$PROJECT_ID/$_IMAGE_NAME
   _K8S_NAMESPACE: default
+  _CLUSTER: monolith-trainer
+  _ZONE: us-central1-a
   # Movie batch-only deployment
   _BQ_PROJECT: $PROJECT_ID
   _BQ_DATASET: movie
@@ -28,6 +30,22 @@ steps:
   - name: gcr.io/cloud-builders/gcloud
     id: Get GKE credentials
     args: ["container", "clusters", "get-credentials", "${_CLUSTER}", "--zone", "${_ZONE}", "--project", "$PROJECT_ID"]
+
+  # 3a) Install/upgrade Kubeflow TFJob operator (idempotent)
+  - name: gcr.io/cloud-builders/kubectl
+    id: Install TFJob operator
+    env:
+      - CLOUDSDK_COMPUTE_ZONE=${_ZONE}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
+    args: ["apply", "-k", "github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=v1.7.0"]
+
+  # 3b) Ensure checkpoint PVC exists
+  - name: gcr.io/cloud-builders/kubectl
+    id: Ensure checkpoint PVC
+    env:
+      - CLOUDSDK_COMPUTE_ZONE=${_ZONE}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
+    args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "kubernetes/monolith/monolith-checkpoint-pvc.yaml"]
 
   # 4) Render TFJob manifest for movie batch training (BigQuery)
   - name: gcr.io/cloud-builders/kubectl
