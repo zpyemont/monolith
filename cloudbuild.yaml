@@ -1,5 +1,5 @@
 substitutions:
-  _REGION: eu-west1
+  _REGION: europe-west1
   _IMAGE_NAME: monolith
   _K8S_NAMESPACE: default
   _CLUSTER: monolith
