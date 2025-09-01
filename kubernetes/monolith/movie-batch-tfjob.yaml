@@ -1,0 +1,92 @@
+apiVersion: kubeflow.org/v1
+kind: TFJob
+metadata:
+  name: movie-batch-job
+spec:
+  runPolicy:
+    cleanPodPolicy: None
+    backoffLimit: 10
+    ttlSecondsAfterFinished: 86400
+  tfReplicaSpecs:
+    PS:
+      replicas: 2
+      restartPolicy: OnFailure
+      template:
+        spec:
+          containers:
+          - name: tensorflow
+            image: __IMAGE__
+            imagePullPolicy: IfNotPresent
+            command: ["python"]
+            args:
+              - "/movie_online_model.py"
+              - "--training_type=batch"
+              - "--model_dir=/checkpoints/movie_lens_tutorial"
+              - "--model_name=movie_lens_tutorial"
+              # BigQuery Storage API flags
+              - "--bq_project=__BQ_PROJECT__"
+              - "--bq_dataset=__BQ_DATASET__"
+              - "--bq_table=__BQ_TABLE__"
+              - "--bq_location=__BQ_LOCATION__"
+              - "--bq_selected_fields=mov,uid,label"
+              - "--bq_mov_col=mov"
+              - "--bq_uid_col=uid"
+              - "--bq_label_col=label"
+              - "--bq_parallelism=__BQ_PARALLELISM__"
+            env: []
+            resources:
+              requests:
+                cpu: "500m"
+                memory: "2Gi"
+              limits:
+                cpu: "2"
+                memory: "4Gi"
+            volumeMounts:
+              - name: checkpoint-volume
+                mountPath: /checkpoints
+          volumes:
+            - name: checkpoint-volume
+              persistentVolumeClaim:
+                claimName: monolith-checkpoint-pvc
+
+    Worker:
+      replicas: 2
+      restartPolicy: OnFailure
+      template:
+        spec:
+          containers:
+          - name: tensorflow
+            image: __IMAGE__
+            imagePullPolicy: IfNotPresent
+            command: ["python"]
+            args:
+              - "/movie_online_model.py"
+              - "--training_type=batch"
+              - "--model_dir=/checkpoints/movie_lens_tutorial"
+              - "--model_name=movie_lens_tutorial"
+              # BigQuery Storage API flags
+              - "--bq_project=__BQ_PROJECT__"
+              - "--bq_dataset=__BQ_DATASET__"
+              - "--bq_table=__BQ_TABLE__"
+              - "--bq_location=__BQ_LOCATION__"
+              - "--bq_selected_fields=mov,uid,label"
+              - "--bq_mov_col=mov"
+              - "--bq_uid_col=uid"
+              - "--bq_label_col=label"
+              - "--bq_parallelism=__BQ_PARALLELISM__"
+            env: []
+            resources:
+              requests:
+                cpu: "500m"
+                memory: "2Gi"
+              limits:
+                cpu: "2"
+                memory: "4Gi"
+            volumeMounts:
+              - name: checkpoint-volume
+                mountPath: /checkpoints
+          volumes:
+            - name: checkpoint-volume
+              persistentVolumeClaim:
+                claimName: monolith-checkpoint-pvc
+
