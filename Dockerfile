@@ -1,14 +1,5 @@
 FROM hanzhi713/monolith:ubuntu22.04
 
-# Java will be mounted
-ENV JAVA_HOME=/opt/jdk/jdk1.8.0_201
-ENV PATH=$JAVA_HOME/bin:$PATH
-
-# Hadoop will be mounted
-ENV HADOOP_HOME=/usr/lib/hadoop
-ENV HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
-ENV PATH=$HADOOP_HOME/bin:$PATH
-
 # Copy necessary scripts and configs
 COPY ./movie_online_model.py /movie_online_model.py
 COPY markdown/demo/ml_dataset.py /ml_dataset.py
@@ -27,17 +18,6 @@ RUN python3 -m pip install --no-cache-dir \
     tensorflow-io==0.17.0 \
     google-cloud-bigquery \
     google-cloud-bigquery-storage
-
-# Install Java
-RUN wget -q https://github.com/frekele/oracle-java/releases/download/8u201-b09/jdk-8u201-linux-x64.tar.gz && \
-    mkdir /opt/jdk && \
-    tar -xzf jdk-8u201-linux-x64.tar.gz -C /opt/jdk && \
-    update-alternatives --install /usr/bin/java java /opt/jdk/jdk1.8.0_201/bin/java 100 && \
-    update-alternatives --install /usr/bin/javac javac /opt/jdk/jdk1.8.0_201/bin/javac 100
-
-# Install Hadoop
-RUN wget -q https://dlcdn.apache.org/hadoop/common/hadoop-3.3.6/hadoop-3.3.6.tar.gz && \
-    tar -xzf hadoop-3.3.6.tar.gz && mv hadoop-3.3.6 /usr/lib/hadoop && rm hadoop-3.3.6.tar.gz
 
 # TF Serving: copy necessary files from extracted artifacts
 COPY extracted_artifacts /output
