@@ -65,7 +65,7 @@ steps:
       - |
         IMAGE_URI="gcr.io/$PROJECT_ID/$_IMAGE_NAME:$COMMIT_SHA"
         sed \
-          -e "s#__IMAGE__#$IMAGE_URI#g" \
+          -e "s#__IMAGE__#$$IMAGE_URI#g" \
           -e "s#__BQ_PROJECT__#$_BQ_PROJECT#g" \
           -e "s#__BQ_DATASET__#$_BQ_DATASET#g" \
           -e "s#__BQ_TABLE__#$_BQ_TABLE#g" \
