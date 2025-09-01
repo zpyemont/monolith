@@ -40,15 +40,7 @@ steps:
     id: Get GKE credentials
     args: ["container", "clusters", "get-credentials", "${_CLUSTER}", "--region", "${_REGION}", "--project", "$PROJECT_ID"]
 
-  # 3a) Install/upgrade Kubeflow TFJob operator (idempotent)
-  - name: gcr.io/cloud-builders/kubectl
-    id: Install TFJob operator
-    env:
-      - CLOUDSDK_COMPUTE_REGION=${_REGION}
-      - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
-    args: ["apply", "-k", "github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=v1.7.0"]
-
-  # 3b) Ensure checkpoint PVC exists
+  # 3a) Ensure checkpoint PVC exists
   - name: gcr.io/cloud-builders/kubectl
     id: Ensure checkpoint PVC
     env:
