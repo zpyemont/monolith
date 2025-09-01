@@ -4,6 +4,8 @@ substitutions:
   _K8S_NAMESPACE: default
   _CLUSTER: monolith-trainer
   _ZONE: us-central1-a
+  _IMAGE_URI: ""
+  _ARTIFACTS_IMAGE: ""
   # Movie batch-only deployment
   _BQ_PROJECT: $PROJECT_ID
   _BQ_DATASET: movie
@@ -15,15 +17,24 @@ options:
   logging: CLOUD_LOGGING_ONLY
 
 steps:
-  # 1) Build image
+  # 1) Build image (requires _ARTIFACTS_IMAGE)
   - name: gcr.io/cloud-builders/docker
     id: Build image
-    args: ["build", "-t", "gcr.io/$PROJECT_ID/$_IMAGE_NAME:$COMMIT_SHA", "."]
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ -z "${_ARTIFACTS_IMAGE}" ]; then echo "_ARTIFACTS_IMAGE must be set"; exit 1; fi
+        docker build \
+          --build-arg ARTIFACTS_IMAGE=${_ARTIFACTS_IMAGE} \
+          -t gcr.io/$PROJECT_ID/$_IMAGE_NAME:$COMMIT_SHA .
 
   # 2) Push image
   - name: gcr.io/cloud-builders/docker
     id: Push image
     args: ["push", "gcr.io/$PROJECT_ID/$_IMAGE_NAME:$COMMIT_SHA"]
+
+  # (combine step removed; base image already includes artifacts)
 
   # 3) Set kubectl context
   - name: gcr.io/cloud-builders/gcloud
@@ -53,8 +64,10 @@ steps:
     args:
       - -c
       - |
+        IMAGE_URI=${_IMAGE_URI}
+        if [ -z "$IMAGE_URI" ]; then IMAGE_URI="gcr.io/$PROJECT_ID/$_IMAGE_NAME:$COMMIT_SHA"; fi
         sed \
-          -e "s#__IMAGE__#gcr.io/$PROJECT_ID/$_IMAGE_NAME:$COMMIT_SHA#g" \
+          -e "s#__IMAGE__#$IMAGE_URI#g" \
           -e "s#__BQ_PROJECT__#$_BQ_PROJECT#g" \
           -e "s#__BQ_DATASET__#$_BQ_DATASET#g" \
           -e "s#__BQ_TABLE__#$_BQ_TABLE#g" \

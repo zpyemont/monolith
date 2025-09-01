@@ -1,4 +1,5 @@
-FROM hanzhi713/monolith:ubuntu22.04
+ARG ARTIFACTS_IMAGE
+FROM ${ARTIFACTS_IMAGE}
 
 # Copy necessary scripts and configs
 COPY ./movie_online_model.py /movie_online_model.py
@@ -18,9 +19,6 @@ RUN python3 -m pip install --no-cache-dir \
     tensorflow-io==0.17.0 \
     google-cloud-bigquery \
     google-cloud-bigquery-storage
-
-# TF Serving: copy necessary files from extracted artifacts
-COPY extracted_artifacts /output
 
 ENV MONOLITH_TFS_BINARY=/output/bin/tensorflow_model_server
 

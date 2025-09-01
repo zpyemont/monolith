@@ -1,0 +1,8 @@
+FROM hanzhi713/monolith:ubuntu22.04
+
+# Include local serving artifacts into the image
+COPY extracted_artifacts /output
+
+# Point Monolith to the embedded TensorFlow Serving binary
+ENV MONOLITH_TFS_BINARY=/output/bin/tensorflow_model_server
+
