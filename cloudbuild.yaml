@@ -1,9 +1,9 @@
 substitutions:
-  _REGION: us-central1
+  _REGION: eu-west1
   _IMAGE_NAME: monolith
   _K8S_NAMESPACE: default
-  _CLUSTER: monolith-trainer
-  _ZONE: us-central1-a
+  _CLUSTER: monolith
+  _ZONE: eu-west1-a
   _ARTIFACTS_IMAGE: ""
   # Movie batch-only deployment
   _BQ_PROJECT: $PROJECT_ID
