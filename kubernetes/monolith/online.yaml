@@ -55,6 +55,11 @@ spec:
           - "--model_name=movie_lens_tutorial"
           - "--stream_timeout_ms=86400000"
           - "--skip_empty_batches=false"
+          - "--kafka_servers=$(KAFKA_SERVERS)"
+          - "--kafka_username=$(KAFKA_USERNAME)"
+          - "--kafka_password=$(KAFKA_PASSWORD)"
+          - "--kafka_topics=$(KAFKA_TOPICS)"
+          - "--kafka_security_protocol=$(KAFKA_SECURITY_PROTOCOL)"
         env:
           # TF_CONFIG for distributed training
           - name: TF_CONFIG
@@ -67,6 +72,17 @@ spec:
           # ZooKeeper servers for model registration and realtime training
           - name: ZK_SERVERS
             value: "monolith-zookeeper-client.default.svc.cluster.local:2181"
+          # Kafka configuration for Confluent Cloud (optional - will fallback to demo data if not configured)
+          - name: KAFKA_SERVERS
+            value: ""  # Set to your Confluent bootstrap servers
+          - name: KAFKA_USERNAME
+            value: ""  # Set to your Confluent API key  
+          - name: KAFKA_PASSWORD
+            value: ""  # Set to your Confluent API secret
+          - name: KAFKA_TOPICS
+            value: "movie-training"
+          - name: KAFKA_SECURITY_PROTOCOL
+            value: "SASL_SSL"
         ports:
           - containerPort: 2223
         volumeMounts:
@@ -114,6 +130,11 @@ spec:
           - "--model_name=movie_lens_tutorial"
           - "--stream_timeout_ms=86400000"
           - "--skip_empty_batches=false"
+          - "--kafka_servers=$(KAFKA_SERVERS)"
+          - "--kafka_username=$(KAFKA_USERNAME)"
+          - "--kafka_password=$(KAFKA_PASSWORD)"
+          - "--kafka_topics=$(KAFKA_TOPICS)"
+          - "--kafka_security_protocol=$(KAFKA_SECURITY_PROTOCOL)"
         env:
           # TF_CONFIG for distributed training
           - name: TF_CONFIG
@@ -126,6 +147,17 @@ spec:
           # ZooKeeper servers for model registration and realtime training
           - name: ZK_SERVERS
             value: "monolith-zookeeper-client.default.svc.cluster.local:2181"
+          # Kafka configuration for Confluent Cloud (optional - will fallback to demo data if not configured)
+          - name: KAFKA_SERVERS
+            value: ""  # Set to your Confluent bootstrap servers
+          - name: KAFKA_USERNAME
+            value: ""  # Set to your Confluent API key  
+          - name: KAFKA_PASSWORD
+            value: ""  # Set to your Confluent API secret
+          - name: KAFKA_TOPICS
+            value: "movie-training"
+          - name: KAFKA_SECURITY_PROTOCOL
+            value: "SASL_SSL"
         ports:
           - containerPort: 2222
         volumeMounts:

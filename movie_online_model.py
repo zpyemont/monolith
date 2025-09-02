@@ -23,7 +23,13 @@ from monolith.native_training.runtime.ops import gen_monolith_ops
 from monolith.agent_service.agent_controller import declare_saved_model
 from monolith.agent_service.backends import ZKBackend
 
-#kafka flags are already defined by absl
+# Kafka flags for online training
+flags.DEFINE_string('kafka_topics', 'movie-training', 'Comma-separated Kafka topics to consume from')
+flags.DEFINE_string('kafka_group_id', 'movie-training-group', 'Kafka consumer group ID')
+flags.DEFINE_string('kafka_servers', 'localhost:9092', 'Kafka broker servers')
+flags.DEFINE_string('kafka_username', '', 'Kafka SASL username (for Confluent Cloud)')
+flags.DEFINE_string('kafka_password', '', 'Kafka SASL password (for Confluent Cloud)')
+flags.DEFINE_string('kafka_security_protocol', 'PLAINTEXT', 'Security protocol: PLAINTEXT, SASL_SSL, etc.')
 flags.DEFINE_enum('training_type', 'online', ['batch', 'online', 'stdin'],
                   'Type of training to launch')
 flags.DEFINE_integer('stream_timeout_ms', 86400000, 'Timeout for Kafka stream operations in milliseconds (24 hours for startup scenario)')
@@ -208,33 +214,52 @@ class MovieRankingOnlineTraining(MovieRankingModelBase):
         self._empty_queue_count = 0
         
     def input_fn(self, mode):
-        # consume real-time training examples from Kafka
-        # Build Kafka configuration with SSL settings
-        kafka_config = [
-            f"security.protocol={os.environ.get('KAFKA_SECURITY_PROTOCOL', 'PLAINTEXT')}",
-        ]
-        
-        # Add SSL config if using SSL
-        if os.environ.get('KAFKA_SECURITY_PROTOCOL') == 'SSL':
-            kafka_config.extend([
-                f"ssl.ca.location={os.environ.get('KAFKA_SSL_CA_LOCATION', '')}",
-                f"ssl.certificate.location={os.environ.get('KAFKA_SSL_CA_LOCATION', '')}",
-                f"ssl.certificate.location={os.environ.get('KAFKA_SSL_CERTIFICATE_LOCATION', '')}",
-                f"ssl.key.location={os.environ.get('KAFKA_SSL_KEY_LOCATION', '')}"
-            ])
-        
-        # Create dataset from Kafka
-        dataset = create_plain_kafka_dataset(
-            topics=FLAGS.kafka_topics.split(','),
-            group_id=FLAGS.kafka_group_id,
-            servers=FLAGS.kafka_servers,
-            stream_timeout=FLAGS.stream_timeout_ms,
-            poll_batch_size=16,  # Match demo size
-            configuration=kafka_config
-        )
-        
-        # Kafka provides correct format - use original decode_example  
-        return dataset.map(lambda x: decode_example(x.message)).map(to_ragged)
+        # For MVP: Fall back to demo dataset if Kafka not available
+        # This allows testing model propagation without setting up Kafka
+        try:
+            # Try Kafka first if configured
+            if FLAGS.kafka_servers != 'localhost:9092':  # Non-default means intentionally configured
+                kafka_config = [
+                    f"security.protocol={FLAGS.kafka_security_protocol}",
+                ]
+                
+                # Add SASL config for Confluent Cloud
+                if FLAGS.kafka_security_protocol == 'SASL_SSL':
+                    kafka_config.extend([
+                        "sasl.mechanism=PLAIN",
+                        f"sasl.username={FLAGS.kafka_username}",
+                        f"sasl.password={FLAGS.kafka_password}",
+                        "ssl.endpoint.identification.algorithm=https"
+                    ])
+                elif FLAGS.kafka_security_protocol == 'SSL':
+                    kafka_config.extend([
+                        f"ssl.ca.location={os.environ.get('KAFKA_SSL_CA_LOCATION', '')}",
+                        f"ssl.certificate.location={os.environ.get('KAFKA_SSL_CERTIFICATE_LOCATION', '')}",
+                        f"ssl.key.location={os.environ.get('KAFKA_SSL_KEY_LOCATION', '')}"
+                    ])
+                
+                # Create dataset from Kafka
+                dataset = create_plain_kafka_dataset(
+                    topics=FLAGS.kafka_topics.split(','),
+                    group_id=FLAGS.kafka_group_id,
+                    servers=FLAGS.kafka_servers,
+                    stream_timeout=FLAGS.stream_timeout_ms,
+                    poll_batch_size=16,  # Match demo size
+                    configuration=kafka_config
+                )
+                
+                return dataset.map(lambda x: decode_example(x.message)).map(to_ragged)
+            else:
+                raise Exception("Using demo dataset fallback")
+                
+        except Exception as e:
+            logging.warning(f"Kafka not available ({e}); using demo dataset for online training")
+            
+            # Fall back to demo dataset (same as batch training)
+            env = json.loads(os.environ.get('TF_CONFIG', '{}'))
+            dataset = get_preprocessed_dataset('1m')
+            dataset = dataset.shard(get_worker_count(env), env.get('task', {}).get('index', 0))
+            return dataset.repeat().batch(16, drop_remainder=True).map(to_ragged).prefetch(tf.data.AUTOTUNE)
 
 
 class MovieRankingBatchStdin(MovieRankingModelBase):
