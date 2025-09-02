@@ -93,7 +93,7 @@ spec:
                 key: api-secret
                 optional: true
           - name: KAFKA_TOPIC
-            value: "movie-training"
+            value: "training-sample-topic"
           - name: KAFKA_GROUP_ID
             value: "movie-training-group"
         ports:
