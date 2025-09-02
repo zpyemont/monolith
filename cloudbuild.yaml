@@ -11,6 +11,10 @@ substitutions:
   _BQ_TABLE: training_examples
   _BQ_LOCATION: US
   _BQ_PARALLELISM: '4'
+  # Confluent Kafka configuration (optional - leave empty to use demo dataset)
+  _CONFLUENT_BOOTSTRAP_SERVERS: ""
+  _CONFLUENT_API_KEY: ""
+  _CONFLUENT_API_SECRET: ""
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -86,6 +90,29 @@ steps:
       - CLOUDSDK_COMPUTE_REGION=${_REGION}
       - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
     args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "kubernetes/monolith/zookeeper.yaml"]
+
+  # 6a) Create Kafka secrets from substitution variables
+  - name: gcr.io/cloud-builders/kubectl
+    id: Create Kafka Secrets
+    env:
+      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        # Create Kubernetes secret from substitution variables (if provided)
+        if [ -n "${_CONFLUENT_BOOTSTRAP_SERVERS}" ] && [ -n "${_CONFLUENT_API_KEY}" ]; then
+          kubectl create secret generic confluent-kafka-config \
+            --from-literal=bootstrap-servers="${_CONFLUENT_BOOTSTRAP_SERVERS}" \
+            --from-literal=api-key="${_CONFLUENT_API_KEY}" \
+            --from-literal=api-secret="${_CONFLUENT_API_SECRET}" \
+            --namespace=$_K8S_NAMESPACE \
+            --dry-run=client -o yaml | kubectl apply -f -
+          echo "Confluent Kafka secrets created from substitution variables"
+        else
+          echo "Confluent substitution variables not provided - Kafka will use demo dataset fallback"
+        fi
 
   # 7) Apply the scheduler CronJob/RBAC to run nightly
   - name: gcr.io/cloud-builders/kubectl

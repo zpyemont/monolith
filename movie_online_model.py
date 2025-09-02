@@ -217,32 +217,30 @@ class MovieRankingOnlineTraining(MovieRankingModelBase):
         # For MVP: Fall back to demo dataset if Kafka not available
         # This allows testing model propagation without setting up Kafka
         try:
+            # Get Confluent Kafka configuration from environment (set by Kubernetes)
+            kafka_bootstrap_servers = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', FLAGS.kafka_servers)
+            confluent_api_key = os.environ.get('CONFLUENT_API_KEY', FLAGS.kafka_username)
+            confluent_api_secret = os.environ.get('CONFLUENT_API_SECRET', FLAGS.kafka_password)
+            kafka_topic = os.environ.get('KAFKA_TOPIC', FLAGS.kafka_topics or 'movie-training')
+            kafka_group_id = os.environ.get('KAFKA_GROUP_ID', FLAGS.kafka_group_id)
+            
             # Try Kafka first if configured
-            if FLAGS.kafka_servers != 'localhost:9092' and FLAGS.kafka_topics is not None:  # Non-default means intentionally configured
+            if kafka_bootstrap_servers and kafka_bootstrap_servers != 'localhost:9092' and confluent_api_key:
                 kafka_config = [
-                    f"security.protocol={FLAGS.kafka_security_protocol}",
+                    "security.protocol=SASL_SSL",
+                    "sasl.mechanism=PLAIN",
+                    f"sasl.username={confluent_api_key}",
+                    f"sasl.password={confluent_api_secret}",
+                    "ssl.endpoint.identification.algorithm=https"
                 ]
                 
-                # Add SASL config for Confluent Cloud
-                if FLAGS.kafka_security_protocol == 'SASL_SSL':
-                    kafka_config.extend([
-                        "sasl.mechanism=PLAIN",
-                        f"sasl.username={FLAGS.kafka_username}",
-                        f"sasl.password={FLAGS.kafka_password}",
-                        "ssl.endpoint.identification.algorithm=https"
-                    ])
-                elif FLAGS.kafka_security_protocol == 'SSL':
-                    kafka_config.extend([
-                        f"ssl.ca.location={os.environ.get('KAFKA_SSL_CA_LOCATION', '')}",
-                        f"ssl.certificate.location={os.environ.get('KAFKA_SSL_CERTIFICATE_LOCATION', '')}",
-                        f"ssl.key.location={os.environ.get('KAFKA_SSL_KEY_LOCATION', '')}"
-                    ])
+                logging.info(f"Connecting to Confluent Kafka: {kafka_bootstrap_servers}, topic: {kafka_topic}")
                 
                 # Create dataset from Kafka
                 dataset = create_plain_kafka_dataset(
-                    topics=FLAGS.kafka_topics.split(','),
-                    group_id=FLAGS.kafka_group_id,
-                    servers=FLAGS.kafka_servers,
+                    topics=[kafka_topic],
+                    group_id=kafka_group_id,
+                    servers=kafka_bootstrap_servers,
                     stream_timeout=FLAGS.stream_timeout_ms,
                     poll_batch_size=16,  # Match demo size
                     configuration=kafka_config
