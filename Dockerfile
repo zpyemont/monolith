@@ -12,13 +12,20 @@ COPY monolith/agent_service/agent_controller.py /usr/local/lib/python3.8/site-pa
 COPY train_and_register_model.sh /train_and_register_model.sh
 COPY conf/platform_config_file.cfg /conf/platform_config_file.cfg
 
+# Copy Kubernetes-native model registry files
+COPY model_registry.py /model_registry.py
+COPY dynamic_model_loader.py /dynamic_model_loader.py
+COPY model_health_monitor.py /model_health_monitor.py
+
 RUN ln -s /usr/local/lib/python3.8/site-packages/monolith/agent_service/agent.py /agent.py
 
 # Install TensorFlow I/O for BigQuery Storage API ingestion (compatible with TF 2.4.x)
+# Also install Kubernetes client for model registry
 RUN python3 -m pip install --no-cache-dir \
     tensorflow-io==0.17.0 \
     google-cloud-bigquery \
-    google-cloud-bigquery-storage
+    google-cloud-bigquery-storage \
+    kubernetes==29.0.0
 
 ENV MONOLITH_TFS_BINARY=/output/bin/tensorflow_model_server
 
