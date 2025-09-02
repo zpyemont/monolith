@@ -24,8 +24,7 @@ from monolith.agent_service.agent_controller import declare_saved_model
 from monolith.agent_service.backends import ZKBackend
 
 # Kafka flags - using existing Monolith framework flags where available
-# kafka_topics and kafka_group_id are already defined in monolith.native_training.gflags_utils
-flags.DEFINE_string('kafka_servers', 'localhost:9092', 'Kafka broker servers')
+# kafka_topics, kafka_group_id, and kafka_servers are already defined in monolith.native_training.gflags_utils
 flags.DEFINE_string('kafka_username', '', 'Kafka SASL username (for Confluent Cloud)')
 flags.DEFINE_string('kafka_password', '', 'Kafka SASL password (for Confluent Cloud)')
 flags.DEFINE_string('kafka_security_protocol', 'PLAINTEXT', 'Security protocol: PLAINTEXT, SASL_SSL, etc.')
@@ -217,7 +216,7 @@ class MovieRankingOnlineTraining(MovieRankingModelBase):
         # This allows testing model propagation without setting up Kafka
         try:
             # Get Confluent Kafka configuration from environment (set by Kubernetes)
-            kafka_bootstrap_servers = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', FLAGS.kafka_servers)
+            kafka_bootstrap_servers = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', FLAGS.kafka_servers or 'localhost:9092')
             confluent_api_key = os.environ.get('CONFLUENT_API_KEY', FLAGS.kafka_username)
             confluent_api_secret = os.environ.get('CONFLUENT_API_SECRET', FLAGS.kafka_password)
             kafka_topic = os.environ.get('KAFKA_TOPIC', FLAGS.kafka_topics or 'movie-training')
