@@ -3,7 +3,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: monolith-checkpoint-pvc
 spec:
-  accessModes: ["ReadWriteMany"]
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: standard-rwo
   resources:
     requests:
       storage: 10Gi
