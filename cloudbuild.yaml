@@ -42,13 +42,13 @@ steps:
   # 3) Set kubectl context (regional/Autopilot cluster)
   - name: gcr.io/cloud-builders/gcloud
     id: Get GKE credentials
-    args: ["container", "clusters", "get-credentials", "${_CLUSTER}", "--region", "${_REGION}", "--project", "$PROJECT_ID"]
+    args: ["container", "clusters", "get-credentials", "${_CLUSTER}", "--zone", "${_ZONE}", "--project", "$PROJECT_ID"]
 
   # 3a) Ensure checkpoint PVC exists
   - name: gcr.io/cloud-builders/kubectl
     id: Ensure checkpoint PVC
     env:
-      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_COMPUTE_ZONE=${_ZONE}
       - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
     args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "kubernetes/monolith/monolith-checkpoint-pvc.yaml"]
 
@@ -87,7 +87,7 @@ steps:
   - name: gcr.io/cloud-builders/kubectl
     id: Deploy ZooKeeper
     env:
-      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_COMPUTE_ZONE=${_ZONE}
       - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
     args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "kubernetes/monolith/zookeeper.yaml"]
 
@@ -95,7 +95,7 @@ steps:
   - name: gcr.io/cloud-builders/kubectl
     id: Create Kafka Secrets
     env:
-      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_COMPUTE_ZONE=${_ZONE}
       - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
     entrypoint: bash
     args:
@@ -118,7 +118,7 @@ steps:
   - name: gcr.io/cloud-builders/kubectl
     id: Apply TFJob CronJob
     env:
-      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_COMPUTE_ZONE=${_ZONE}
       - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
     args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "kubernetes/monolith/movie-batch-cronjob.yaml"]
 
@@ -137,7 +137,7 @@ steps:
   - name: gcr.io/cloud-builders/kubectl
     id: Deploy Online Training
     env:
-      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_COMPUTE_ZONE=${_ZONE}
       - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
     args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "/workspace/online.rendered.yaml"]
 
@@ -156,7 +156,7 @@ steps:
   - name: gcr.io/cloud-builders/kubectl
     id: Deploy Serving Agents
     env:
-      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_COMPUTE_ZONE=${_ZONE}
       - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
     args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "/workspace/agent.rendered.yaml"]
 
