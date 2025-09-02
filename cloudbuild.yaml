@@ -3,7 +3,7 @@ substitutions:
   _IMAGE_NAME: monolith
   _K8S_NAMESPACE: default
   _CLUSTER: monolith
-  _ZONE: eu-west1-a
+  _ZONE: eu-west1-c
   _ARTIFACTS_IMAGE: ""
   # Movie batch-only deployment
   _BQ_PROJECT: $PROJECT_ID
