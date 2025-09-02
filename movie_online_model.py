@@ -282,7 +282,7 @@ def main(_argv):
     # build runner config
     logging.info(f"FLAGS.training_type: {FLAGS.training_type}")
     config = RunnerConfig(
-        discovery_type=ServiceDiscoveryType.PRIMUS,
+        discovery_type=ServiceDiscoveryType.ZK,
         tf_config=raw_tf_conf,
         save_checkpoints_steps=10000,
         enable_model_ckpt_info=True,
