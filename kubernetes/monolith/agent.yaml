@@ -11,6 +11,9 @@ spec:
       port: 2223
       targetPort: 2223
       nodePort: 30223          # Optional: specify a specific NodePort
+    - name: http
+      port: 8501
+      targetPort: 8501
 
 ---
 
@@ -29,27 +32,25 @@ spec:
       labels:
         app: monolith-serving-ps
     spec:
+      serviceAccountName: monolith-model-registry-sa
       containers:
       - name: agent
-        image: monolith:latest
-        imagePullPolicy: Never
+        image: __IMAGE__  # Will be replaced by Cloud Build
+        imagePullPolicy: IfNotPresent
         command: ["python", "agent.py"]
         args:
           - "--conf=./demo.conf"
+          - "--model_name=movie_lens_tutorial"
+          - "--bzid=monolith_serving_test"
         env:
+          # In-cluster ZooKeeper configuration (no SSL)
           - name: ZK_SERVER
-            value: my-cluster-zookeeper-client.default.svc.cluster.local:2181
+            value: monolith-zookeeper-client.default.svc.cluster.local:2181
           - name: ZK_USE_SSL
-            value: "true"
-          - name: ZK_TRUST_FILE
-            value: "/opt/tls/ca/ca.crt"
-          - name: ZK_CERT_FILE
-            value: "/opt/tls/client/client.crt"
-          - name: ZK_KEY_FILE
-            value: "/opt/tls/client/client.key"
+            value: "false"
           # ZooKeeper session timeout settings
           - name: ZK_SESSION_TIMEOUT_MS
-            value: "60000"  # 60 seconds (default is usually 30s)
+            value: "60000"  # 60 seconds
           - name: ZK_CONNECTION_TIMEOUT_MS
             value: "30000"  # 30 seconds
           # Port configuration for the agent
@@ -68,9 +69,9 @@ spec:
             value: "prediction_service=3,saved_model=3"  # Verbose prediction logging
           - name: GRPC_VERBOSITY
             value: "DEBUG"    # Enable gRPC debug logs
-          # TensorFlow Serving binary path
+          # TensorFlow Serving binary path (from Dockerfile ENV)
           - name: MONOLITH_TFS_BINARY
-            value: "/output/tensorflow_model_server.runfiles/__main__/external/org_tensorflow_serving/tensorflow_serving/model_servers/tensorflow_model_server"
+            value: "/output/bin/tensorflow_model_server"
         ports:
           - containerPort: 2223
             name: grpc
@@ -96,19 +97,7 @@ spec:
         volumeMounts:
           - name: checkpoint-volume
             mountPath: /checkpoints
-          - name: zk-client-tls
-            mountPath: /opt/tls/client
-            readOnly: true
-          - name: zk-server-ca
-            mountPath: /opt/tls/ca
-            readOnly: true
       volumes:
         - name: checkpoint-volume
           persistentVolumeClaim:
             claimName: monolith-checkpoint-pvc
-        - name: zk-client-tls
-          secret:
-            secretName: monolith-zk-client
-        - name: zk-server-ca
-          secret:
-            secretName: my-cluster-cluster-ca-cert

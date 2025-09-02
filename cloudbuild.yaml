@@ -141,6 +141,25 @@ steps:
       - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
     args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "/workspace/online.rendered.yaml"]
 
+  # 10) Render and deploy serving agents
+  - name: gcr.io/cloud-builders/kubectl
+    id: Render Serving manifest
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        IMAGE_URI="gcr.io/$PROJECT_ID/$_IMAGE_NAME:$COMMIT_SHA"
+        sed -e "s#__IMAGE__#$$IMAGE_URI#g" \
+          kubernetes/monolith/agent.yaml > /workspace/agent.rendered.yaml
+
+  # 11) Deploy serving agents
+  - name: gcr.io/cloud-builders/kubectl
+    id: Deploy Serving Agents
+    env:
+      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
+    args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "/workspace/agent.rendered.yaml"]
+
 images:
   - "gcr.io/$PROJECT_ID/$_IMAGE_NAME:$COMMIT_SHA"
 
