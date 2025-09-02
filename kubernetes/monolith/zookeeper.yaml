@@ -1,0 +1,114 @@
+---
+# ZooKeeper Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: monolith-zookeeper
+  labels:
+    app: monolith-zookeeper
+spec:
+  ports:
+  - port: 2181
+    name: client
+  - port: 2888
+    name: server
+  - port: 3888
+    name: leader-election
+  clusterIP: None
+  selector:
+    app: monolith-zookeeper
+
+---
+# ZooKeeper StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: monolith-zookeeper
+spec:
+  serviceName: monolith-zookeeper
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monolith-zookeeper
+  template:
+    metadata:
+      labels:
+        app: monolith-zookeeper
+    spec:
+      containers:
+      - name: zookeeper
+        image: zookeeper:3.8
+        ports:
+        - containerPort: 2181
+          name: client
+        - containerPort: 2888
+          name: server
+        - containerPort: 3888
+          name: leader-election
+        env:
+        - name: ZOO_MY_ID
+          value: "1"
+        - name: ZOO_SERVERS
+          value: "server.1=monolith-zookeeper-0.monolith-zookeeper:2888:3888;2181"
+        - name: ZOO_STANDALONE_ENABLED
+          value: "true"
+        - name: ZOO_ADMINSERVER_ENABLED
+          value: "false"
+        volumeMounts:
+        - name: datadir
+          mountPath: /data
+        - name: datalogdir
+          mountPath: /datalog
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - "echo ruok | nc localhost 2181 | grep imok"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c  
+            - "echo ruok | nc localhost 2181 | grep imok"
+          initialDelaySeconds: 10
+          periodSeconds: 5
+  volumeClaimTemplates:
+  - metadata:
+      name: datadir
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi
+  - metadata:
+      name: datalogdir
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi
+
+---
+# ZooKeeper Client Service (for external access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: monolith-zookeeper-client
+  labels:
+    app: monolith-zookeeper
+spec:
+  ports:
+  - port: 2181
+    name: client
+  selector:
+    app: monolith-zookeeper

@@ -55,10 +55,6 @@ spec:
           - "--model_name=movie_lens_tutorial"
           - "--stream_timeout_ms=86400000"
           - "--skip_empty_batches=false"
-          # Minimal Kafka args (will be ignored without Kafka setup)
-          - "--kafka_topics=movie-topic"
-          - "--kafka_group_id=movie-online-group"
-          - "--kafka_servers=localhost:9092"
         env:
           # TF_CONFIG for distributed training
           - name: TF_CONFIG
@@ -68,6 +64,9 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: metadata.name
+          # ZooKeeper servers for model registration and realtime training
+          - name: ZK_SERVERS
+            value: "monolith-zookeeper-client.default.svc.cluster.local:2181"
         ports:
           - containerPort: 2223
         volumeMounts:
@@ -115,10 +114,6 @@ spec:
           - "--model_name=movie_lens_tutorial"
           - "--stream_timeout_ms=86400000"
           - "--skip_empty_batches=false"
-          # Minimal Kafka args (will be ignored without Kafka setup)
-          - "--kafka_topics=movie-topic"
-          - "--kafka_group_id=movie-online-group"
-          - "--kafka_servers=localhost:9092"
         env:
           # TF_CONFIG for distributed training
           - name: TF_CONFIG
@@ -128,6 +123,9 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: metadata.name
+          # ZooKeeper servers for model registration and realtime training
+          - name: ZK_SERVERS
+            value: "monolith-zookeeper-client.default.svc.cluster.local:2181"
         ports:
           - containerPort: 2222
         volumeMounts:

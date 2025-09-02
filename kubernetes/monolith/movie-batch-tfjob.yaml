@@ -34,7 +34,10 @@ spec:
               - "--bq_uid_col=uid"
               - "--bq_label_col=label"
               - "--bq_parallelism=__BQ_PARALLELISM__"
-            env: []
+            env:
+              # ZooKeeper servers for model registration
+              - name: ZK_SERVERS
+                value: "monolith-zookeeper-client.default.svc.cluster.local:2181"
             resources:
               requests:
                 cpu: "250m"
@@ -73,7 +76,10 @@ spec:
               - "--bq_uid_col=uid"
               - "--bq_label_col=label"
               - "--bq_parallelism=__BQ_PARALLELISM__"
-            env: []
+            env:
+              # ZooKeeper servers for model registration
+              - name: ZK_SERVERS
+                value: "monolith-zookeeper-client.default.svc.cluster.local:2181"
             resources:
               requests:
                 cpu: "250m"

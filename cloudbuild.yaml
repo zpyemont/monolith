@@ -79,13 +79,13 @@ steps:
           --from-file=tfjob.yaml=/workspace/movie-batch-tfjob.rendered.yaml \
           --dry-run=client -o yaml | kubectl -n $_K8S_NAMESPACE apply -f -
 
-  # 6) Setup Model Registry RBAC
+  # 6) Deploy ZooKeeper for model registration
   - name: gcr.io/cloud-builders/kubectl
-    id: Setup Model Registry
+    id: Deploy ZooKeeper
     env:
       - CLOUDSDK_COMPUTE_REGION=${_REGION}
       - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
-    args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "kubernetes/monolith/model-registry-rbac.yaml"]
+    args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "kubernetes/monolith/zookeeper.yaml"]
 
   # 7) Apply the scheduler CronJob/RBAC to run nightly
   - name: gcr.io/cloud-builders/kubectl

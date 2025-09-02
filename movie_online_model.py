@@ -19,9 +19,9 @@ from monolith.native_training.data.datasets import create_plain_kafka_dataset
 from monolith.native_training.model_export.export_context import ExportMode
 # Import Monolith operations to ensure they are loaded during training and export
 from monolith.native_training.runtime.ops import gen_monolith_ops
-# Import model registry for Kubernetes-native model management
-from model_registry import ModelRegistry, create_model_metadata_from_export, validate_model_health, ModelUpdateMonitor
-from dynamic_model_loader import DynamicModelLoader, ModelServingWrapper
+# Import ZooKeeper model registration utilities
+from monolith.agent_service.agent_controller import declare_saved_model
+from monolith.agent_service.backends import ZKBackend
 
 #kafka flags are already defined by absl
 flags.DEFINE_enum('training_type', 'online', ['batch', 'online', 'stdin'],
@@ -49,6 +49,38 @@ FLAGS = flags.FLAGS
 def get_worker_count(env: dict):
     cluster = env.get('cluster', {})
     return len(cluster.get('worker', [])) + len(cluster.get('chief', []))
+
+
+def register_model_after_training():
+    """Register the trained model with ZooKeeper for serving."""
+    try:
+        # Initialize ZooKeeper backend
+        zk_servers = os.environ.get('ZK_SERVERS', 'monolith-zookeeper-client.default.svc.cluster.local:2181')
+        bd = ZKBackend("monolith_serving_test", zk_servers)
+        bd.start()
+        
+        try:
+            # Find the exported model directory
+            export_base = "/checkpoints/movie_lens_tutorial/exported_models"
+            if tf.io.gfile.exists(export_base):
+                # Declare the saved model in ZooKeeper
+                model_name = declare_saved_model(
+                    bd=bd,
+                    export_base=export_base,
+                    model_name="movie_lens_tutorial",
+                    overwrite=True,
+                    arch="entry_ps"
+                )
+                logging.info(f"Successfully registered model {model_name} in ZooKeeper")
+            else:
+                logging.error(f"Export directory {export_base} does not exist")
+                
+        finally:
+            bd.stop()
+            
+    except Exception as e:
+        logging.error(f"Failed to register model in ZooKeeper: {e}")
+        # Don't fail the training job if registration fails
 
 
 class MovieRankingModelBase(MonolithModel):
@@ -175,47 +207,6 @@ class MovieRankingOnlineTraining(MovieRankingModelBase):
         super().__init__(params)
         self._empty_queue_count = 0
         
-        # Initialize dynamic model monitoring for serving updates
-        self.model_loader = None
-        self.serving_wrapper = None
-        self._setup_model_monitoring()
-    
-    def _setup_model_monitoring(self):
-        """Setup dynamic model monitoring for batch model updates."""
-        try:
-            # Initialize model serving wrapper for dynamic updates
-            self.serving_wrapper = ModelServingWrapper(
-                model_name="movie_lens_tutorial",
-                initial_model_path=None  # Will be loaded from registry
-            )
-            
-            logging.info("Dynamic model monitoring initialized for online training")
-            
-        except Exception as e:
-            logging.error(f"Failed to setup model monitoring: {e}")
-            self.serving_wrapper = None
-    
-    def _get_model_serving_hook(self):
-        """Create a training hook for model serving integration."""
-        if not self.serving_wrapper:
-            return None
-            
-        class OnlineModelServingHook(tf.estimator.SessionRunHook):
-            """Hook to integrate model serving with online training."""
-            
-            def __init__(self, serving_wrapper):
-                self.serving_wrapper = serving_wrapper
-                
-            def begin(self):
-                logging.info("Online model serving hook started")
-                
-            def end(self, session):
-                if self.serving_wrapper:
-                    self.serving_wrapper.stop()
-                logging.info("Online model serving hook ended")
-                
-        return OnlineModelServingHook(self.serving_wrapper)
-        
     def input_fn(self, mode):
         # consume real-time training examples from Kafka
         # Build Kafka configuration with SSL settings
@@ -300,7 +291,9 @@ def main(_argv):
         server_type=tf_conf.get('task', {}).get('type', ''),
         index=tf_conf.get('task', {}).get('index', 0), 
         base_name="movie_lens",
-        bzid="monolith_serving_test"
+        bzid="monolith_serving_test",
+        # Use in-cluster ZooKeeper for model registration and realtime training
+        zk_servers=os.environ.get('ZK_SERVERS', 'monolith-zookeeper-client.default.svc.cluster.local:2181')
     )
 
     # instantiate model params based on training type
@@ -311,66 +304,37 @@ def main(_argv):
     else:
         # online streaming mode
         params = MovieRankingOnlineTraining.params().instantiate()
-        # enable real-time parameter sync to serving PS
+        # Enable real-time parameter sync to serving PS
         config.enable_realtime_training = True
 
     # build estimator and train
     estimator = Estimator(params, config)
-    
-    # Add model serving hook for online training
-    if FLAGS.training_type == 'online' and hasattr(params, '_get_model_serving_hook'):
-        serving_hook = params._get_model_serving_hook()
-        if serving_hook:
-            logging.info("Adding model serving hook to online training")
-            # For online training, we'll start the monitoring separately since
-            # the Monolith training loop might not support additional hooks easily
-            try:
-                # Start model monitoring in background
-                if hasattr(params, 'serving_wrapper') and params.serving_wrapper:
-                    logging.info("Model serving wrapper is active for dynamic updates")
-            except Exception as hook_error:
-                logging.warning(f"Could not add serving hook: {hook_error}")
     
     estimator.train(max_steps=1000000)
 
     # Export the final model for serving
     if FLAGS.training_type == 'batch':
         logging.info("Batch training completed. Exporting model for serving...")
-        export_result = estimator.export_saved_model(
+        estimator.export_saved_model(
             batch_size=64,
             name="movie_lens_model",
             dense_only=False
         )
         logging.info("Model export completed.")
         
-        # Register model with Kubernetes-native registry
-        try:
-            model_registry = ModelRegistry()
-            export_path = export_result  # export_saved_model returns the path
-            checkpoint_path = config.model_dir
-            
-            # Create model metadata
-            model_metadata = create_model_metadata_from_export(
-                model_name="movie_lens_tutorial",
-                export_path=export_path,
-                checkpoint_path=checkpoint_path,
-                training_type="batch",
-                metrics={}  # Could add training metrics here
-            )
-            
-            # Validate model health before registration
-            if validate_model_health(export_path):
-                success = model_registry.register_model(model_metadata)
-                if success:
-                    logging.info(f"Successfully registered model in ConfigMap: {model_metadata.model_name} v{model_metadata.version}")
-                else:
-                    logging.error("Failed to register model in ConfigMap")
-            else:
-                logging.error("Model failed health validation, skipping registration")
-                
-        except Exception as e:
-            logging.error(f"Error during model registration: {e}")
-            # Don't fail the training job if registration fails
+        # Register model with ZooKeeper - only primary worker should register
+        tf_conf = json.loads(os.environ.get('TF_CONFIG', '{}'))
+        task_type = tf_conf.get('task', {}).get('type', '')
+        task_index = tf_conf.get('task', {}).get('index', 0)
+        
+        if task_type == 'worker' and task_index == 0:
+            logging.info("Primary worker - registering model with ZooKeeper")
+            register_model_after_training()
+        elif not task_type:
+            logging.info("Single-node training - registering model with ZooKeeper")
+            register_model_after_training()
+        else:
+            logging.info(f"Worker {task_type}:{task_index} - skipping model registration")
 
 
 if __name__ == '__main__':
