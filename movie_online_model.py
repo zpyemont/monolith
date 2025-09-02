@@ -219,7 +219,7 @@ class MovieRankingOnlineTraining(MovieRankingModelBase):
             kafka_bootstrap_servers = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', FLAGS.kafka_servers or 'localhost:9092')
             confluent_api_key = os.environ.get('CONFLUENT_API_KEY', FLAGS.kafka_username)
             confluent_api_secret = os.environ.get('CONFLUENT_API_SECRET', FLAGS.kafka_password)
-            kafka_topic = os.environ.get('KAFKA_TOPIC', FLAGS.kafka_topics or 'movie-training')
+            kafka_topic = os.environ.get('KAFKA_TOPIC', FLAGS.kafka_topics or 'training-sample-topic')
             kafka_group_id = os.environ.get('KAFKA_GROUP_ID', FLAGS.kafka_group_id or 'movie-training-group')
             
             # Try Kafka first if configured
