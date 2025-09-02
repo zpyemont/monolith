@@ -293,7 +293,7 @@ def main(_argv):
         base_name="movie_lens",
         bzid="monolith_serving_test",
         # Use in-cluster ZooKeeper for model registration and realtime training
-        zk_servers=os.environ.get('ZK_SERVERS', 'monolith-zookeeper-client.default.svc.cluster.local:2181')
+        zk_server=os.environ.get('ZK_SERVERS', 'monolith-zookeeper-client.default.svc.cluster.local:2181')
     )
 
     # instantiate model params based on training type
