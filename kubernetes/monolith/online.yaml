@@ -1,171 +1,147 @@
 ---
-# 2) Headless Service for Parameter Server
+# Headless Service for Parameter Server
 apiVersion: v1
 kind: Service
 metadata:
-  name: monolith-online-ps
+  name: monolith-movie-online-ps
 spec:
   clusterIP: None
   selector:
-    app: monolith-online-ps
+    app: monolith-movie-online-ps
   ports:
     - name: ps
       port: 2223
 
 ---
-# 3) Headless Service for Worker
+# Headless Service for Worker
 apiVersion: v1
 kind: Service
 metadata:
-  name: monolith-online-worker
+  name: monolith-movie-online-worker
 spec:
   clusterIP: None
   selector:
-    app: monolith-online-worker
+    app: monolith-movie-online-worker
   ports:
     - name: worker
       port: 2222
 
 ---
-# 4) StatefulSet for Parameter Server (native ZK TLS)
+# StatefulSet for Parameter Server (Movie Model Testing)
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: monolith-online-ps
+  name: monolith-movie-online-ps
 spec:
-  serviceName: monolith-online-ps
+  serviceName: monolith-movie-online-ps
   replicas: 1
   selector:
     matchLabels:
-      app: monolith-online-ps
+      app: monolith-movie-online-ps
   template:
     metadata:
       labels:
-        app: monolith-online-ps
+        app: monolith-movie-online-ps
     spec:
+      serviceAccountName: monolith-model-registry-sa
       containers:
       - name: ps
-        image: monolith:latest
-        imagePullPolicy: Never
-        command: ["python", "fashion_model.py"]
+        image: __IMAGE__  # Will be replaced by Cloud Build
+        imagePullPolicy: IfNotPresent
+        command: ["python", "/movie_online_model.py"]
         args:
           - "--training_type=online"
-          - "--kafka_topics=training-sample-topic"
-          - "--kafka_group_id=fashion-online-group"
-          - "--kafka_servers=$(KAFKA_BOOTSTRAP_SERVERS)"
-          - "--model_dir=/checkpoints/fashion_ranking"
-          - "--model_name=fashion_ranking_model"
-          - "--stream_timeout_ms=86400000"  # 24 hours
-          - "--skip_empty_batches=false"    # Keep running with no data
+          - "--model_dir=/checkpoints/movie_lens_tutorial"
+          - "--model_name=movie_lens_tutorial"
+          - "--stream_timeout_ms=86400000"
+          - "--skip_empty_batches=false"
+          # Minimal Kafka args (will be ignored without Kafka setup)
+          - "--kafka_topics=movie-topic"
+          - "--kafka_group_id=movie-online-group"
+          - "--kafka_servers=localhost:9092"
         env:
           # TF_CONFIG for distributed training
           - name: TF_CONFIG
-            value: '{"cluster": {"ps": ["monolith-online-ps-0.monolith-online-ps.default.svc.cluster.local:2223"], "worker": ["monolith-online-worker-0.monolith-online-worker.default.svc.cluster.local:2222"]}, "task": {"type": "ps", "index": 0}}'
-          # Kafka TLS (unchanged)
-          - name: KAFKA_BOOTSTRAP_SERVERS
-            value: "my-cluster-kafka-bootstrap.default.svc.cluster.local:9093"
-          - name: KAFKA_SECURITY_PROTOCOL
-            value: "SSL"
-          - name: KAFKA_SSL_CA_LOCATION
-            value: "/opt/kafka/certs/ca.crt"
-          - name: KAFKA_SSL_CERTIFICATE_LOCATION
-            value: "/opt/kafka/user/user.crt"
-          - name: KAFKA_SSL_KEY_LOCATION
-            value: "/opt/kafka/user/user.key"
-
+            value: '{"cluster": {"ps": ["monolith-movie-online-ps-0.monolith-movie-online-ps.default.svc.cluster.local:2223"], "worker": ["monolith-movie-online-worker-0.monolith-movie-online-worker.default.svc.cluster.local:2222"]}, "task": {"type": "ps", "index": 0}}'
+          # Pod name for index detection
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
         ports:
           - containerPort: 2223
         volumeMounts:
           - name: checkpoint-volume
             mountPath: /checkpoints
-          - name: kafka-ca
-            mountPath: /opt/kafka/certs
-            readOnly: true
-          - name: kafka-user-tls
-            mountPath: /opt/kafka/user
-            readOnly: true
-          # ZK volumes removed
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
 
       volumes:
         - name: checkpoint-volume
           persistentVolumeClaim:
             claimName: monolith-checkpoint-pvc
-        - name: kafka-ca
-          secret:
-            secretName: my-cluster-cluster-ca-cert
-        - name: kafka-user-tls
-          secret:
-            secretName: monolith-user
-        # ZK volumes removed
 
 ---
-# 5) StatefulSet for Worker (native ZK TLS)
+# StatefulSet for Worker (Movie Model Testing)
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: monolith-online-worker
+  name: monolith-movie-online-worker
 spec:
-  serviceName: monolith-online-worker
+  serviceName: monolith-movie-online-worker
   replicas: 1
   selector:
     matchLabels:
-      app: monolith-online-worker
+      app: monolith-movie-online-worker
   template:
     metadata:
       labels:
-        app: monolith-online-worker
+        app: monolith-movie-online-worker
     spec:
+      serviceAccountName: monolith-model-registry-sa
       containers:
       - name: worker
-        image: monolith:latest
-        imagePullPolicy: Never
-        command: ["python", "fashion_model.py"]
+        image: __IMAGE__  # Will be replaced by Cloud Build
+        imagePullPolicy: IfNotPresent
+        command: ["python", "/movie_online_model.py"]
         args:
           - "--training_type=online"
-          - "--kafka_topics=training-sample-topic"
-          - "--kafka_group_id=fashion-online-group"
-          - "--kafka_servers=$(KAFKA_BOOTSTRAP_SERVERS)"
-          - "--model_dir=/checkpoints/fashion_ranking"
-          - "--model_name=fashion_ranking_model"
-          - "--stream_timeout_ms=86400000"  # 24 hours
-          - "--skip_empty_batches=false"    # Keep running with no data
+          - "--model_dir=/checkpoints/movie_lens_tutorial"
+          - "--model_name=movie_lens_tutorial"
+          - "--stream_timeout_ms=86400000"
+          - "--skip_empty_batches=false"
+          # Minimal Kafka args (will be ignored without Kafka setup)
+          - "--kafka_topics=movie-topic"
+          - "--kafka_group_id=movie-online-group"
+          - "--kafka_servers=localhost:9092"
         env:
           # TF_CONFIG for distributed training
           - name: TF_CONFIG
-            value: '{"cluster": {"ps": ["monolith-online-ps-0.monolith-online-ps.default.svc.cluster.local:2223"], "worker": ["monolith-online-worker-0.monolith-online-worker.default.svc.cluster.local:2222"]}, "task": {"type": "worker", "index": 0}}'
-          # Kafka TLS
-          - name: KAFKA_BOOTSTRAP_SERVERS
-            value: "my-cluster-kafka-bootstrap.default.svc.cluster.local:9093"
-          - name: KAFKA_SECURITY_PROTOCOL
-            value: "SSL"
-          - name: KAFKA_SSL_CA_LOCATION
-            value: "/opt/kafka/certs/ca.crt"
-          - name: KAFKA_SSL_CERTIFICATE_LOCATION
-            value: "/opt/kafka/user/user.crt"
-          - name: KAFKA_SSL_KEY_LOCATION
-            value: "/opt/kafka/user/user.key"
-
+            value: '{"cluster": {"ps": ["monolith-movie-online-ps-0.monolith-movie-online-ps.default.svc.cluster.local:2223"], "worker": ["monolith-movie-online-worker-0.monolith-movie-online-worker.default.svc.cluster.local:2222"]}, "task": {"type": "worker", "index": 0}}'
+          # Pod name for index detection
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
         ports:
           - containerPort: 2222
         volumeMounts:
           - name: checkpoint-volume
             mountPath: /checkpoints
-          - name: kafka-ca
-            mountPath: /opt/kafka/certs
-            readOnly: true
-          - name: kafka-user-tls
-            mountPath: /opt/kafka/user
-            readOnly: true
-          # ZK volumes removed
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
 
       volumes:
         - name: checkpoint-volume
           persistentVolumeClaim:
             claimName: monolith-checkpoint-pvc
-        - name: kafka-ca
-          secret:
-            secretName: my-cluster-cluster-ca-cert
-        - name: kafka-user-tls
-          secret:
-            secretName: monolith-user
-        # ZK volumes removed

@@ -79,13 +79,40 @@ steps:
           --from-file=tfjob.yaml=/workspace/movie-batch-tfjob.rendered.yaml \
           --dry-run=client -o yaml | kubectl -n $_K8S_NAMESPACE apply -f -
 
-  # 6) Apply the scheduler CronJob/RBAC to run nightly
+  # 6) Setup Model Registry RBAC
+  - name: gcr.io/cloud-builders/kubectl
+    id: Setup Model Registry
+    env:
+      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
+    args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "kubernetes/monolith/model-registry-rbac.yaml"]
+
+  # 7) Apply the scheduler CronJob/RBAC to run nightly
   - name: gcr.io/cloud-builders/kubectl
     id: Apply TFJob CronJob
     env:
       - CLOUDSDK_COMPUTE_REGION=${_REGION}
       - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
     args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "kubernetes/monolith/movie-batch-cronjob.yaml"]
+
+  # 8) Render and deploy online training
+  - name: gcr.io/cloud-builders/kubectl
+    id: Render Online Training manifest
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        IMAGE_URI="gcr.io/$PROJECT_ID/$_IMAGE_NAME:$COMMIT_SHA"
+        sed -e "s#__IMAGE__#$$IMAGE_URI#g" \
+          kubernetes/monolith/online.yaml > /workspace/online.rendered.yaml
+
+  # 9) Deploy online training
+  - name: gcr.io/cloud-builders/kubectl
+    id: Deploy Online Training
+    env:
+      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
+    args: ["apply", "-n", "$_K8S_NAMESPACE", "-f", "/workspace/online.rendered.yaml"]
 
 images:
   - "gcr.io/$PROJECT_ID/$_IMAGE_NAME:$COMMIT_SHA"
