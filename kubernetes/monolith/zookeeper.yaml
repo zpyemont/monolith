@@ -48,12 +48,12 @@ spec:
         env:
         - name: ZOO_MY_ID
           value: "1"
-        - name: ZOO_SERVERS
-          value: "server.1=monolith-zookeeper-0.monolith-zookeeper:2888:3888;2181"
         - name: ZOO_STANDALONE_ENABLED
           value: "true"
         - name: ZOO_ADMINSERVER_ENABLED
           value: "false"
+        - name: ZOO_4LW_COMMANDS_WHITELIST
+          value: "mntr,conf,ruok,stat"
         volumeMounts:
         - name: datadir
           mountPath: /data
@@ -67,20 +67,14 @@ spec:
             memory: "512Mi"
             cpu: "500m"
         livenessProbe:
-          exec:
-            command:
-            - sh
-            - -c
-            - "echo ruok | nc localhost 2181 | grep imok"
+          tcpSocket:
+            port: 2181
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
-          exec:
-            command:
-            - sh
-            - -c  
-            - "echo ruok | nc localhost 2181 | grep imok"
-          initialDelaySeconds: 10
+          tcpSocket:
+            port: 2181
+          initialDelaySeconds: 15
           periodSeconds: 5
   volumeClaimTemplates:
   - metadata:
