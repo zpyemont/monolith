@@ -224,15 +224,30 @@ class MovieRankingOnlineTraining(MovieRankingModelBase):
             
             # Try Kafka first if configured
             if kafka_bootstrap_servers and kafka_bootstrap_servers != 'localhost:9092' and confluent_api_key:
+                logging.info(f"Kafka configuration detected:")
+                logging.info(f"  Bootstrap servers: {kafka_bootstrap_servers}")
+                logging.info(f"  Topic: {kafka_topic}")
+                logging.info(f"  Group ID: {kafka_group_id}")
+                logging.info(f"  API Key: {confluent_api_key[:8]}..." if confluent_api_key else "  API Key: None")
+                logging.info(f"  API Secret: {'[SET]' if confluent_api_secret else '[NOT SET]'}")
+                
                 kafka_config = [
                     "security.protocol=SASL_SSL",
-                    "sasl.mechanism=PLAIN",
+                    "sasl.mechanism=PLAIN", 
                     f"sasl.username={confluent_api_key}",
                     f"sasl.password={confluent_api_secret}",
-                    "ssl.endpoint.identification.algorithm=https"
+                    "ssl.endpoint.identification.algorithm=https",
+                    "ssl.ca.location=/etc/ssl/certs/ca-certificates.crt",
+                    "enable.ssl.certificate.verification=true",
+                    "session.timeout.ms=45000",
+                    "request.timeout.ms=30000",
+                    "heartbeat.interval.ms=3000",
+                    "api.version.request=true",
+                    "broker.version.fallback=0.10.0",
+                    "debug=broker,topic,msg"
                 ]
                 
-                logging.info(f"Connecting to Confluent Kafka: {kafka_bootstrap_servers}, topic: {kafka_topic}")
+                logging.info(f"Connecting to Confluent Kafka with config: {[c for c in kafka_config if 'password' not in c]}")
                 
                 # Create dataset from Kafka
                 dataset = create_plain_kafka_dataset(

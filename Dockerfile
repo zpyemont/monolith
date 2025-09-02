@@ -22,6 +22,9 @@ RUN python3 -m pip install --no-cache-dir \
     google-cloud-bigquery \
     google-cloud-bigquery-storage
 
+# Ensure SSL certificates are available for Kafka SSL connections
+RUN apt-get update && apt-get install -y ca-certificates && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 ENV MONOLITH_TFS_BINARY=/output/bin/tensorflow_model_server
 
 # Prepare checkpoint directory (if using warm-start)
