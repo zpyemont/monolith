@@ -1,0 +1,49 @@
+---
+# ServiceAccount for model registry operations
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: monolith-model-registry-sa
+  namespace: default
+
+---
+# ClusterRole with permissions for ConfigMap operations
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: default
+  name: monolith-model-registry-role
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create"]
+
+---
+# RoleBinding to attach the role to the service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: monolith-model-registry-binding
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: monolith-model-registry-sa
+  namespace: default
+roleRef:
+  kind: Role
+  name: monolith-model-registry-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ConfigMap to initialize the model registry (will be managed by the system)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: monolith-model-registry
+  namespace: default
+data:
+  models: "{}"
+  last_updated: ""

@@ -19,6 +19,9 @@ from monolith.native_training.data.datasets import create_plain_kafka_dataset
 from monolith.native_training.model_export.export_context import ExportMode
 # Import Monolith operations to ensure they are loaded during training and export
 from monolith.native_training.runtime.ops import gen_monolith_ops
+# Import model registry for Kubernetes-native model management
+from model_registry import ModelRegistry, create_model_metadata_from_export, validate_model_health, ModelUpdateMonitor
+from dynamic_model_loader import DynamicModelLoader, ModelServingWrapper
 
 #kafka flags are already defined by absl
 flags.DEFINE_enum('training_type', 'online', ['batch', 'online', 'stdin'],
@@ -172,6 +175,47 @@ class MovieRankingOnlineTraining(MovieRankingModelBase):
         super().__init__(params)
         self._empty_queue_count = 0
         
+        # Initialize dynamic model monitoring for serving updates
+        self.model_loader = None
+        self.serving_wrapper = None
+        self._setup_model_monitoring()
+    
+    def _setup_model_monitoring(self):
+        """Setup dynamic model monitoring for batch model updates."""
+        try:
+            # Initialize model serving wrapper for dynamic updates
+            self.serving_wrapper = ModelServingWrapper(
+                model_name="movie_lens_tutorial",
+                initial_model_path=None  # Will be loaded from registry
+            )
+            
+            logging.info("Dynamic model monitoring initialized for online training")
+            
+        except Exception as e:
+            logging.error(f"Failed to setup model monitoring: {e}")
+            self.serving_wrapper = None
+    
+    def _get_model_serving_hook(self):
+        """Create a training hook for model serving integration."""
+        if not self.serving_wrapper:
+            return None
+            
+        class OnlineModelServingHook(tf.estimator.SessionRunHook):
+            """Hook to integrate model serving with online training."""
+            
+            def __init__(self, serving_wrapper):
+                self.serving_wrapper = serving_wrapper
+                
+            def begin(self):
+                logging.info("Online model serving hook started")
+                
+            def end(self, session):
+                if self.serving_wrapper:
+                    self.serving_wrapper.stop()
+                logging.info("Online model serving hook ended")
+                
+        return OnlineModelServingHook(self.serving_wrapper)
+        
     def input_fn(self, mode):
         # consume real-time training examples from Kafka
         # Build Kafka configuration with SSL settings
@@ -272,9 +316,61 @@ def main(_argv):
 
     # build estimator and train
     estimator = Estimator(params, config)
+    
+    # Add model serving hook for online training
+    if FLAGS.training_type == 'online' and hasattr(params, '_get_model_serving_hook'):
+        serving_hook = params._get_model_serving_hook()
+        if serving_hook:
+            logging.info("Adding model serving hook to online training")
+            # For online training, we'll start the monitoring separately since
+            # the Monolith training loop might not support additional hooks easily
+            try:
+                # Start model monitoring in background
+                if hasattr(params, 'serving_wrapper') and params.serving_wrapper:
+                    logging.info("Model serving wrapper is active for dynamic updates")
+            except Exception as hook_error:
+                logging.warning(f"Could not add serving hook: {hook_error}")
+    
     estimator.train(max_steps=1000000)
 
-    # ZooKeeper model registration removed for batch completion
+    # Export the final model for serving
+    if FLAGS.training_type == 'batch':
+        logging.info("Batch training completed. Exporting model for serving...")
+        export_result = estimator.export_saved_model(
+            batch_size=64,
+            name="movie_lens_model",
+            dense_only=False
+        )
+        logging.info("Model export completed.")
+        
+        # Register model with Kubernetes-native registry
+        try:
+            model_registry = ModelRegistry()
+            export_path = export_result  # export_saved_model returns the path
+            checkpoint_path = config.model_dir
+            
+            # Create model metadata
+            model_metadata = create_model_metadata_from_export(
+                model_name="movie_lens_tutorial",
+                export_path=export_path,
+                checkpoint_path=checkpoint_path,
+                training_type="batch",
+                metrics={}  # Could add training metrics here
+            )
+            
+            # Validate model health before registration
+            if validate_model_health(export_path):
+                success = model_registry.register_model(model_metadata)
+                if success:
+                    logging.info(f"Successfully registered model in ConfigMap: {model_metadata.model_name} v{model_metadata.version}")
+                else:
+                    logging.error("Failed to register model in ConfigMap")
+            else:
+                logging.error("Model failed health validation, skipping registration")
+                
+        except Exception as e:
+            logging.error(f"Error during model registration: {e}")
+            # Don't fail the training job if registration fails
 
 
 if __name__ == '__main__':

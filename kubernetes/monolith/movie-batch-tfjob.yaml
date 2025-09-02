@@ -13,6 +13,7 @@ spec:
       restartPolicy: OnFailure
       template:
         spec:
+          serviceAccountName: monolith-model-registry-sa
           containers:
           - name: tensorflow
             image: __IMAGE__
@@ -51,6 +52,7 @@ spec:
       restartPolicy: OnFailure
       template:
         spec:
+          serviceAccountName: monolith-model-registry-sa
           containers:
           - name: tensorflow
             image: __IMAGE__
