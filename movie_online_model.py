@@ -24,8 +24,7 @@ from monolith.agent_service.agent_controller import declare_saved_model
 from monolith.agent_service.backends import ZKBackend
 
 # Kafka flags - using existing Monolith framework flags where available
-# kafka_topics is already defined in monolith.native_training.gflags_utils
-flags.DEFINE_string('kafka_group_id', 'movie-training-group', 'Kafka consumer group ID')
+# kafka_topics and kafka_group_id are already defined in monolith.native_training.gflags_utils
 flags.DEFINE_string('kafka_servers', 'localhost:9092', 'Kafka broker servers')
 flags.DEFINE_string('kafka_username', '', 'Kafka SASL username (for Confluent Cloud)')
 flags.DEFINE_string('kafka_password', '', 'Kafka SASL password (for Confluent Cloud)')
@@ -222,7 +221,7 @@ class MovieRankingOnlineTraining(MovieRankingModelBase):
             confluent_api_key = os.environ.get('CONFLUENT_API_KEY', FLAGS.kafka_username)
             confluent_api_secret = os.environ.get('CONFLUENT_API_SECRET', FLAGS.kafka_password)
             kafka_topic = os.environ.get('KAFKA_TOPIC', FLAGS.kafka_topics or 'movie-training')
-            kafka_group_id = os.environ.get('KAFKA_GROUP_ID', FLAGS.kafka_group_id)
+            kafka_group_id = os.environ.get('KAFKA_GROUP_ID', FLAGS.kafka_group_id or 'movie-training-group')
             
             # Try Kafka first if configured
             if kafka_bootstrap_servers and kafka_bootstrap_servers != 'localhost:9092' and confluent_api_key:
