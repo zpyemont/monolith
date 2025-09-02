@@ -46,7 +46,7 @@ spec:
                   }
               # ZooKeeper TLS configuration
               - name: ZK_SERVER
-                value: "my-cluster-zookeeper-client.default.svc.cluster.local:2181"
+                value: "monolith-zookeeper-client.default.svc.cluster.local:2181"
               - name: ZK_USE_SSL
                 value: "true"
               - name: ZK_TRUST_FILE
@@ -120,7 +120,7 @@ spec:
                   }
               # ZooKeeper TLS configuration
               - name: ZK_SERVER
-                value: "my-cluster-zookeeper-client.default.svc.cluster.local:2181"
+                value: "monolith-zookeeper-client.default.svc.cluster.local:2181"
               - name: ZK_USE_SSL
                 value: "true"
               - name: ZK_TRUST_FILE
