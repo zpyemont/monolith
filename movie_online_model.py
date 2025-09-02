@@ -23,8 +23,8 @@ from monolith.native_training.runtime.ops import gen_monolith_ops
 from monolith.agent_service.agent_controller import declare_saved_model
 from monolith.agent_service.backends import ZKBackend
 
-# Kafka flags for online training
-flags.DEFINE_string('kafka_topics', 'movie-training', 'Comma-separated Kafka topics to consume from')
+# Kafka flags - using existing Monolith framework flags where available
+# kafka_topics is already defined in monolith.native_training.gflags_utils
 flags.DEFINE_string('kafka_group_id', 'movie-training-group', 'Kafka consumer group ID')
 flags.DEFINE_string('kafka_servers', 'localhost:9092', 'Kafka broker servers')
 flags.DEFINE_string('kafka_username', '', 'Kafka SASL username (for Confluent Cloud)')
@@ -218,7 +218,7 @@ class MovieRankingOnlineTraining(MovieRankingModelBase):
         # This allows testing model propagation without setting up Kafka
         try:
             # Try Kafka first if configured
-            if FLAGS.kafka_servers != 'localhost:9092':  # Non-default means intentionally configured
+            if FLAGS.kafka_servers != 'localhost:9092' and FLAGS.kafka_topics is not None:  # Non-default means intentionally configured
                 kafka_config = [
                     f"security.protocol={FLAGS.kafka_security_protocol}",
                 ]
