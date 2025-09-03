@@ -2,12 +2,11 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: monolith-checkpoint-pvc
+  annotations:
+    volume.beta.kubernetes.io/storage-provisioner: pd.csi.storage.gke.io
 spec:
   accessModes: ["ReadWriteOnce"]
   storageClassName: standard-rwo
   resources:
     requests:
       storage: 10Gi
-  metadata:
-    annotations:
-      volume.beta.kubernetes.io/storage-provisioner: pd.csi.storage.gke.io
