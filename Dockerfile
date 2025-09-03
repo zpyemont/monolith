@@ -23,7 +23,16 @@ RUN python3 -m pip install --no-cache-dir \
     google-cloud-bigquery-storage
 
 # Ensure SSL certificates are available for Kafka SSL connections
-RUN apt-get update && apt-get install -y ca-certificates && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    ca-certificates-java \
+    openssl \
+    && update-ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Set SSL certificate environment variables for Kafka
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_DIR=/etc/ssl/certs
 
 ENV MONOLITH_TFS_BINARY=/output/bin/tensorflow_model_server
 
