@@ -8,3 +8,6 @@ spec:
   resources:
     requests:
       storage: 10Gi
+  metadata:
+    annotations:
+      volume.beta.kubernetes.io/storage-provisioner: pd.csi.storage.gke.io
