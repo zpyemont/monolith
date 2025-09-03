@@ -1,5 +1,5 @@
 substitutions:
-  _REGION: europe-west1
+  _REGION: europe-west3
   _IMAGE_NAME: monolith
   _K8S_NAMESPACE: default
   _CLUSTER: monolith
@@ -73,7 +73,7 @@ steps:
   - name: gcr.io/cloud-builders/kubectl
     id: Create/Update TFJob ConfigMap
     env:
-      - CLOUDSDK_COMPUTE_ZONE=${_ZONE}
+      - CLOUDSDK_COMPUTE_REGION=${_REGION}
       - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}
     entrypoint: bash
     args:
