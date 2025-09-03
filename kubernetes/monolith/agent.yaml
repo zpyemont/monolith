@@ -32,7 +32,6 @@ spec:
       labels:
         app: monolith-serving-ps
     spec:
-      serviceAccountName: monolith-model-registry-sa
       containers:
       - name: agent
         image: __IMAGE__  # Will be replaced by Cloud Build
