@@ -43,6 +43,7 @@ spec:
       labels:
         app: monolith-movie-online-ps
     spec:
+      serviceAccountName: default
       containers:
       - name: ps
         image: __IMAGE__  # Will be replaced by Cloud Build
@@ -130,6 +131,7 @@ spec:
       labels:
         app: monolith-movie-online-worker
     spec:
+      serviceAccountName: default
       containers:
       - name: worker
         image: __IMAGE__  # Will be replaced by Cloud Build
