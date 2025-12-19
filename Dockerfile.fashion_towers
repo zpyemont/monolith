@@ -1,0 +1,43 @@
+ARG ARTIFACTS_IMAGE
+FROM ${ARTIFACTS_IMAGE}
+
+# Copy fashion towers model
+COPY ./fashion_model_towers.py /fashion_model_towers.py
+
+# Copy necessary shared scripts and configs
+COPY markdown/demo/ml_dataset.py /ml_dataset.py
+COPY demo.conf /demo.conf
+COPY fashion.conf /fashion.conf
+COPY monolith/agent_service/agent_controller.py /usr/local/lib/python3.8/site-packages/monolith/agent_service/agent_controller.py
+COPY conf/platform_config_file.cfg /conf/platform_config_file.cfg
+
+RUN ln -sf /usr/local/lib/python3.8/site-packages/monolith/agent_service/agent.py /agent.py
+
+# Install BigQuery client + pandas for fast to_dataframe() loading
+# Pin versions compatible with TF 2.4's numpy ~1.19.2
+RUN python3 -m pip install --no-cache-dir \
+    'protobuf>=3.19.0,<4.0.0' \
+    'google-cloud-bigquery==2.20.0' \
+    'grpcio>=1.32.0,<1.40.0' \
+    'pytz' \
+    'numpy>=1.19.2,<1.20.0' \
+    'pandas>=1.1.0,<1.4.0' \
+    'pyarrow>=3.0.0,<6.0.0'
+
+# SSL certificates should already be in base image
+# Only update if needed (skip ca-certificates-java to avoid pulling Java/190MB)
+
+# Set SSL certificate environment variables
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_DIR=/etc/ssl/certs
+ENV MONOLITH_TFS_BINARY=/output/bin/tensorflow_model_server
+
+# Prepare checkpoint directory
+RUN mkdir -p /checkpoints && chmod 777 /checkpoints
+
+COPY ./monolith/native_training/zk_utils.py /usr/local/lib/python3.8/site-packages/monolith/native_training/zk_utils.py
+COPY ./monolith/agent_service/tfs_wrapper.py /usr/local/lib/python3.8/site-packages/monolith/agent_service/tfs_wrapper.py
+
+ENTRYPOINT ["python3", "/fashion_model_towers.py"]
+# Default to batch training mode
+CMD ["--training_type=batch"]
