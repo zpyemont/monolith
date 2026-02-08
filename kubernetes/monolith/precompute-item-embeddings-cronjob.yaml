@@ -1,0 +1,109 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: precompute-item-embeddings
+  namespace: default
+  labels:
+    app: monolith
+    component: precompute-embeddings
+    model: two-tower
+spec:
+  # Schedule: Run every 4 hours
+  schedule: "0 */4 * * *"
+
+  # Don't start new job if previous job is still running
+  concurrencyPolicy: Forbid
+
+  # How many completed/failed jobs to keep for history
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+
+  # Deadline for job to start (10 minutes)
+  startingDeadlineSeconds: 600
+
+  jobTemplate:
+    metadata:
+      labels:
+        app: monolith
+        component: precompute-embeddings
+        model: two-tower
+    spec:
+      # Number of retries before marking job as failed
+      backoffLimit: 2
+
+      # Maximum time for job to complete (2 hours)
+      activeDeadlineSeconds: 7200
+
+      template:
+        metadata:
+          labels:
+            app: precompute-item-embeddings
+        spec:
+          restartPolicy: OnFailure
+
+          # Service account with database access permissions
+          serviceAccountName: default
+
+          containers:
+          - name: precompute
+            image: gcr.io/looksyuk/monolith-fashion-two-tower:latest
+            imagePullPolicy: Always
+
+            command: ["python"]
+            args:
+              - "/precompute_item_embeddings.py"
+              - "--model_dir=/checkpoints/fashion_two_tower/exported_models/entry/"
+              - "--pg_host=$(PG_HOST)"
+              - "--pg_port=$(PG_PORT)"
+              - "--pg_database=looksy"
+              - "--pg_user=$(PG_USER)"
+              - "--pg_password=$(PG_PASSWORD)"
+              - "--batch_size=256"
+
+            env:
+              # PostgreSQL connection from Kubernetes secret
+              - name: PG_HOST
+                valueFrom:
+                  secretKeyRef:
+                    name: postgres-credentials
+                    key: host
+              - name: PG_PORT
+                valueFrom:
+                  secretKeyRef:
+                    name: postgres-credentials
+                    key: port
+                    optional: true
+              - name: PG_USER
+                valueFrom:
+                  secretKeyRef:
+                    name: postgres-credentials
+                    key: username
+              - name: PG_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: postgres-credentials
+                    key: password
+
+              # TensorFlow configuration
+              - name: TF_CPP_MIN_LOG_LEVEL
+                value: "1"  # INFO level
+
+            volumeMounts:
+              # Model checkpoint directory (shared PVC)
+              - name: checkpoint-volume
+                mountPath: /checkpoints
+                readOnly: true
+
+            resources:
+              requests:
+                cpu: "2"
+                memory: "8Gi"
+              limits:
+                cpu: "4"
+                memory: "16Gi"
+
+          volumes:
+            # Persistent volume for model checkpoints
+            - name: checkpoint-volume
+              persistentVolumeClaim:
+                claimName: monolith-checkpoint-pvc

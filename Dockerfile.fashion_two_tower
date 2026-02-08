@@ -1,13 +1,17 @@
 ARG ARTIFACTS_IMAGE
 FROM ${ARTIFACTS_IMAGE}
 
-# Copy fashion towers model
-COPY ./fashion_model_towers.py /fashion_model_towers.py
+# Copy fashion two-tower model
+COPY ./fashion_model_two_tower.py /fashion_model_two_tower.py
+
+# Copy precompute script for item embeddings
+COPY ./scripts/precompute_item_embeddings.py /precompute_item_embeddings.py
 
 # Copy necessary shared scripts and configs
 COPY markdown/demo/ml_dataset.py /ml_dataset.py
 COPY demo.conf /demo.conf
 COPY fashion.conf /fashion.conf
+COPY two_tower.conf /two_tower.conf
 COPY monolith/agent_service/agent_controller.py /usr/local/lib/python3.8/site-packages/monolith/agent_service/agent_controller.py
 COPY conf/platform_config_file.cfg /conf/platform_config_file.cfg
 
@@ -22,7 +26,8 @@ RUN python3 -m pip install --no-cache-dir \
     'pytz' \
     'numpy>=1.19.2,<1.20.0' \
     'pandas>=1.1.0,<1.4.0' \
-    'pyarrow>=3.0.0,<6.0.0'
+    'pyarrow>=3.0.0,<6.0.0' \
+    'pyfarmhash'
 
 # SSL certificates should already be in base image
 # Only update if needed (skip ca-certificates-java to avoid pulling Java/190MB)
@@ -47,6 +52,6 @@ COPY ./monolith/native_training/estimator.py /usr/local/lib/python3.8/site-packa
 COPY ./monolith/native_training/distributed_serving_ops.py /usr/local/lib/python3.8/site-packages/monolith/native_training/distributed_serving_ops.py
 COPY ./monolith/native_training/model_export/export_context.py /usr/local/lib/python3.8/site-packages/monolith/native_training/model_export/export_context.py
 
-ENTRYPOINT ["python3", "/fashion_model_towers.py"]
+ENTRYPOINT ["python3", "/fashion_model_two_tower.py"]
 # Default to batch training mode
 CMD ["--training_type=batch"]

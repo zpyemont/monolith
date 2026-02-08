@@ -80,3 +80,6 @@ target/
 # go
 vendor/
 
+# Large training data files
+data/*.csv
+

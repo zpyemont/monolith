@@ -1,0 +1,205 @@
+---
+# Headless Service for Parameter Server
+apiVersion: v1
+kind: Service
+metadata:
+  name: monolith-fashion-two-tower-online-ps
+  namespace: default
+spec:
+  clusterIP: None
+  selector:
+    app: monolith-fashion-two-tower-online-ps
+  ports:
+    - name: ps
+      port: 2223
+
+---
+# Headless Service for Worker
+apiVersion: v1
+kind: Service
+metadata:
+  name: monolith-fashion-two-tower-online-worker
+  namespace: default
+spec:
+  clusterIP: None
+  selector:
+    app: monolith-fashion-two-tower-online-worker
+  ports:
+    - name: worker
+      port: 2222
+
+---
+# StatefulSet for Parameter Server (Fashion Two-Tower Model)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: monolith-fashion-two-tower-online-ps
+  namespace: default
+spec:
+  serviceName: monolith-fashion-two-tower-online-ps
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monolith-fashion-two-tower-online-ps
+  template:
+    metadata:
+      labels:
+        app: monolith-fashion-two-tower-online-ps
+    spec:
+      serviceAccountName: default
+      containers:
+      - name: ps
+        image: gcr.io/looksyuk/monolith-fashion-two-tower:latest
+        imagePullPolicy: IfNotPresent
+        command: ["python", "/fashion_model_two_tower.py"]
+        args:
+          - "--training_type=online"
+          - "--model_dir=/checkpoints/fashion_two_tower_dist"
+          - "--stream_timeout_ms=86400000"
+          - "--kafka_servers=$(KAFKA_BOOTSTRAP_SERVERS)"
+          - "--kafka_username=$(CONFLUENT_API_KEY)"
+          - "--kafka_password=$(CONFLUENT_API_SECRET)"
+          - "--kafka_topics=$(KAFKA_TOPIC)"
+          - "--kafka_group_id=$(KAFKA_GROUP_ID)"
+          - "--kafka_security_protocol=SASL_SSL"
+          - "--zk_server=$(ZK_SERVERS)"
+          - "--model_name=fashion_two_tower"
+        env:
+          # TF_CONFIG for distributed training
+          - name: TF_CONFIG
+            value: '{"cluster": {"ps": ["monolith-fashion-two-tower-online-ps-0.monolith-fashion-two-tower-online-ps.default.svc.cluster.local:2223"], "worker": ["monolith-fashion-two-tower-online-worker-0.monolith-fashion-two-tower-online-worker.default.svc.cluster.local:2222"]}, "task": {"type": "ps", "index": 0}}'
+          # Pod name for index detection
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          # ZooKeeper servers for model registration and realtime training
+          - name: ZK_SERVERS
+            value: "monolith-zookeeper-client.default.svc.cluster.local:2181"
+          - name: ZK_SESSION_TIMEOUT_MS
+            value: "60000"
+          # Confluent Kafka on Google Cloud configuration
+          - name: KAFKA_BOOTSTRAP_SERVERS
+            valueFrom:
+              secretKeyRef:
+                name: confluent-kafka-credentials
+                key: bootstrap-servers
+          - name: CONFLUENT_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: confluent-kafka-credentials
+                key: api-key
+          - name: CONFLUENT_API_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: confluent-kafka-credentials
+                key: api-secret
+          - name: KAFKA_TOPIC
+            value: "training_topic"
+          - name: KAFKA_GROUP_ID
+            value: "training-two-tower-group-v1"
+        ports:
+          - containerPort: 2223
+        volumeMounts:
+          - name: checkpoint-volume
+            mountPath: /checkpoints
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "2Gi"
+          limits:
+            cpu: "1"
+            memory: "4Gi"
+
+      volumes:
+        - name: checkpoint-volume
+          persistentVolumeClaim:
+            claimName: monolith-checkpoint-pvc
+
+---
+# StatefulSet for Worker (Fashion Two-Tower Model)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: monolith-fashion-two-tower-online-worker
+  namespace: default
+spec:
+  serviceName: monolith-fashion-two-tower-online-worker
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monolith-fashion-two-tower-online-worker
+  template:
+    metadata:
+      labels:
+        app: monolith-fashion-two-tower-online-worker
+    spec:
+      serviceAccountName: default
+      containers:
+      - name: worker
+        image: gcr.io/looksyuk/monolith-fashion-two-tower:latest
+        imagePullPolicy: IfNotPresent
+        command: ["python", "/fashion_model_two_tower.py"]
+        args:
+          - "--training_type=online"
+          - "--model_dir=/checkpoints/fashion_two_tower_dist"
+          - "--stream_timeout_ms=86400000"
+          - "--kafka_servers=$(KAFKA_BOOTSTRAP_SERVERS)"
+          - "--kafka_username=$(CONFLUENT_API_KEY)"
+          - "--kafka_password=$(CONFLUENT_API_SECRET)"
+          - "--kafka_topics=$(KAFKA_TOPIC)"
+          - "--kafka_group_id=$(KAFKA_GROUP_ID)"
+          - "--kafka_security_protocol=SASL_SSL"
+          - "--zk_server=$(ZK_SERVERS)"
+          - "--model_name=fashion_two_tower"
+        env:
+          # TF_CONFIG for distributed training
+          - name: TF_CONFIG
+            value: '{"cluster": {"ps": ["monolith-fashion-two-tower-online-ps-0.monolith-fashion-two-tower-online-ps.default.svc.cluster.local:2223"], "worker": ["monolith-fashion-two-tower-online-worker-0.monolith-fashion-two-tower-online-worker.default.svc.cluster.local:2222"]}, "task": {"type": "worker", "index": 0}}'
+          # Pod name for index detection
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          # ZooKeeper servers for model registration and realtime training
+          - name: ZK_SERVERS
+            value: "monolith-zookeeper-client.default.svc.cluster.local:2181"
+          - name: ZK_SESSION_TIMEOUT_MS
+            value: "60000"
+          # Confluent Kafka on Google Cloud configuration
+          - name: KAFKA_BOOTSTRAP_SERVERS
+            valueFrom:
+              secretKeyRef:
+                name: confluent-kafka-credentials
+                key: bootstrap-servers
+          - name: CONFLUENT_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: confluent-kafka-credentials
+                key: api-key
+          - name: CONFLUENT_API_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: confluent-kafka-credentials
+                key: api-secret
+          - name: KAFKA_TOPIC
+            value: "training_topic"
+          - name: KAFKA_GROUP_ID
+            value: "training-two-tower-group-v1"
+        ports:
+          - containerPort: 2222
+        volumeMounts:
+          - name: checkpoint-volume
+            mountPath: /checkpoints
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "2Gi"
+          limits:
+            cpu: "1"
+            memory: "4Gi"
+
+      volumes:
+        - name: checkpoint-volume
+          persistentVolumeClaim:
+            claimName: monolith-checkpoint-pvc

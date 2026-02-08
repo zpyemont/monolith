@@ -320,12 +320,15 @@ class ZKBackend(AgentBackend, CtrlBackend, SyncBackend):
     return self._service_info_map.copy()
 
   def _bind_callback(self, model_name, children):
+    logging.info(f"TRACE-BIND-CALLBACK-START: model={model_name}, children={children}")
     with self._lock:
+      logging.info(f"TRACE-BIND-CALLBACK-LOCK-ACQUIRED: model={model_name}")
       if model_name not in self._service_info_map:
         logging.info(f"model {model_name} no longer subscribed.")
         return False
       new_binding = defaultdict(list)
       for child in children:
+        logging.info(f"TRACE-BIND-CALLBACK-PROCESSING-CHILD: {child}")
         sub_graph, ctx_cluster, ctx_id = child.split(":")[:3]
         saved_model = SavedModel(model_name, sub_graph)
         container = Container(ctx_cluster, ctx_id)
@@ -335,6 +338,7 @@ class ZKBackend(AgentBackend, CtrlBackend, SyncBackend):
           continue
         new_binding[sub_graph].append(service_info)
       self._service_info_map[model_name] = new_binding
+      logging.info(f"TRACE-BIND-CALLBACK-COMPLETE: model={model_name}, bindings={dict(new_binding)}")
 
   def report_service_info(self, container: Container,
                           service_info: ContainerServiceInfo) -> None:
@@ -353,7 +357,9 @@ class ZKBackend(AgentBackend, CtrlBackend, SyncBackend):
       return ContainerServiceInfo.deserialize(data)
 
   def _children_watch(self, path, callback):
+    logging.info(f"TRACE-CHILDREN-WATCH-START: path={path}")
     with self._lock:
+      logging.info(f"TRACE-CHILDREN-WATCH-LOCK-ACQUIRED: path={path}")
       if path in self._children_watcher_map and not self._children_watcher_map[
           path]._stopped:
         logging.info(f"active watcher exists on path {path}")
@@ -361,9 +367,11 @@ class ZKBackend(AgentBackend, CtrlBackend, SyncBackend):
         self._zk.ensure_path(
             path
         )  # make sure the path exists otherwise the watcher may not be effective
+        logging.info(f"TRACE-CHILDREN-WATCH-CREATING-WATCHER: path={path}")
         self._children_watcher_map[path] = self._zk.ChildrenWatch(
             path, callback)
         logging.info(f"registered new watcher on {path}")
+      logging.info(f"TRACE-CHILDREN-WATCH-COMPLETE: path={path}")
 
   def list_saved_models(self, model_name: str) -> List[SavedModel]:
     model_path = f"/{self._bzid}/saved_models/{model_name}"
@@ -475,16 +483,28 @@ class ZKBackend(AgentBackend, CtrlBackend, SyncBackend):
 
   def get_sync_targets(self, sub_graph: str) -> Tuple[str, List[str]]:
     with self._lock:
+      logging.info(f"TRACE-GET-SYNC-TARGETS-START: sub_graph={sub_graph}, sync_model_name={self._sync_model_name}")
       if self._is_lost.is_set():
         self._available_saved_model.clear()
         logging.warning("zk is lost, try restarting")
         self._zk.restart()
 
       sub_graph_map = self._service_info_map.get(self._sync_model_name, {})
+      logging.info(f"TRACE-GET-SYNC-TARGETS-MAP: sub_graph_map keys={list(sub_graph_map.keys())}")
       service_infos = sub_graph_map.get(sub_graph, [])
-      return f"{self._sync_model_name}:{sub_graph}", [
-          service_info.grpc for service_info in service_infos
-      ]
+      logging.info(f"TRACE-GET-SYNC-TARGETS-INFOS: service_infos count={len(service_infos)}, infos={service_infos}")
+      targets = [service_info.grpc for service_info in service_infos]
+      logging.info(f"TRACE-GET-SYNC-TARGETS-RESULT: targets={targets}, count={len(targets)}")
+
+      # Write to file for debugging
+      try:
+        with open('/tmp/sync_targets_debug.txt', 'a') as f:
+          import time
+          f.write(f"{time.time()}: sub_graph={sub_graph}, targets={targets}, count={len(targets)}\n")
+      except:
+        pass
+
+      return f"{self._sync_model_name}:{sub_graph}", targets
 
   def create_znode(self, path, value, ephemeral=False, makepath=False) -> None:
     with self._lock:

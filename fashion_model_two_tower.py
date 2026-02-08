@@ -1,22 +1,17 @@
 """
-Fashion Ranking Model - Separate Towers Architecture (RECOMMENDED)
+Fashion Two-Tower Model for Unified Retrieval
 
-This implementation uses separate specialized towers for different feature groups:
-    - Learned Tower: Processes categorical embeddings + numerical features
-    - Text Tower: Processes pre-computed text embeddings
-    - Image Tower: Processes pre-computed image embeddings
-
-All towers are fused before the task-specific prediction heads.
+This implementation replaces the disconnected CLIP retrieval + pointwise ranker
+with a unified two-tower architecture where:
+- User tower: 32-dim user_id -> 128-dim normalized embedding (online inference)
+- Item tower: product features + embeddings -> 128-dim normalized embedding (offline batch)
+- Loss: In-batch negative softmax (temperature-scaled contrastive learning)
+- Retrieval order = Ranking order (no separate ranking step)
 
 Architecture:
-    Learned Features (163-dim) → Learned Tower → 128-dim
-    Text Embedding (1024-dim) → Text Tower → 128-dim
-    Image Embedding (512-dim) → Image Tower → 128-dim
-    ↓
-    Fusion (384-dim) → Fusion Layer → 128-dim → Task Heads
-
-This is the industry-standard architecture for heterogeneous features and is
-recommended for production recommender systems.
+    User Tower (32-dim) -> Dense(128, relu) -> Dropout(0.2) -> Dense(128) -> L2 normalize
+    Item Tower (1667-dim) -> Dense(512) -> Dropout(0.2) -> Dense(256) -> Dropout(0.1) -> Dense(128) -> L2 normalize
+    Loss: temperature-scaled softmax over similarity matrix with in-batch negatives
 
 Input format (CSV):
     uid,pid,label,dwell_time_ms,brand,category,gender,price_tier,like_count,product_age_days,
@@ -24,10 +19,10 @@ Input format (CSV):
 
 Usage:
     # Batch training
-    python fashion_model_towers.py --training_type=batch --fashion_batch_csv=data_1m/fashion_with_embeddings.csv
+    python fashion_model_two_tower.py --training_type=batch --fashion_batch_csv=data/fashion_with_embeddings.csv
 
     # Online training
-    python fashion_model_towers.py --training_type=online --kafka_topics=fashion-training
+    python fashion_model_two_tower.py --training_type=online --kafka_topics=training-sample-topic
 """
 
 from absl import app
@@ -51,7 +46,6 @@ from monolith.native_training.model_export.export_context import ExportMode
 from monolith.agent_service.agent_controller import declare_saved_model, map_model_to_layout
 from monolith.agent_service.backends import ZKBackend
 from monolith.native_training.runtime.ops import gen_monolith_ops
-# Note: ParameterSyncHook is automatically added by cpu_training.py when unified_serving=True
 
 # Training/stream flags
 flags.DEFINE_enum('training_type', 'online', ['batch', 'online', 'stdin'], 'Type of training to launch')
@@ -78,17 +72,17 @@ flags.DEFINE_bool('bq_use_sql_query', True, 'Use SQL query with JOIN instead of 
 flags.DEFINE_bool('bq_filter_missing_embeddings', True, 'Filter out products without embeddings')
 flags.DEFINE_integer('batch_epochs', 3, 'Number of epochs for batch training (0 = infinite)')
 
-# Model persistence
-# Note: 'model_dir', 'zk_server', and 'model_name' are already defined by monolith.native_training.gflags_utils
-
 # Training configuration
 flags.DEFINE_integer('max_steps', 10000, 'Maximum training steps for batch training')
+flags.DEFINE_float('temperature', 0.05, 'Temperature for softmax loss')
+flags.DEFINE_float('learning_rate', 0.05, 'Learning rate for Adagrad optimizer')
 
 FLAGS = flags.FLAGS
 
 # Embedding dimensions
 TEXT_EMB_DIM = 1024  # Text embedding dimension (matches catalog.products)
 IMAGE_EMB_DIM = 512  # CLIP model
+TOWER_OUTPUT_DIM = 128  # Final embedding dimension for both towers
 
 
 def get_worker_count(env: dict):
@@ -153,9 +147,9 @@ def _parse_csv_line(line):
 
     Format:
     uid,pid,label,dwell_time_ms,brand,category,gender,price_tier,like_count,product_age_days,
-    text_emb_0,...,text_emb_767,image_emb_0,...,image_emb_511
+    text_emb_0,...,text_emb_1023,image_emb_0,...,image_emb_511
 
-    Total columns: 10 + 768 + 512 = 1290
+    Total columns: 10 + 1024 + 512 = 1546
     """
     parts = tf.strings.split(line, ',')
 
@@ -172,7 +166,7 @@ def _parse_csv_line(line):
     like_count = tf.strings.to_number(parts[8], out_type=tf.int64)
     product_age_days = tf.strings.to_number(parts[9], out_type=tf.int64)
 
-    # Text embedding (768 dimensions)
+    # Text embedding (1024 dimensions)
     text_emb_parts = parts[10:10+TEXT_EMB_DIM]
     text_embedding = tf.strings.to_number(text_emb_parts, out_type=tf.float32)
 
@@ -220,33 +214,32 @@ def _decode_fashion_example(example_bytes):
     return parsed
 
 
-class FashionRankingModelBase(MonolithModel):
+class FashionTwoTowerModelBase(MonolithModel):
     """
-    Fashion Ranking Model - Separate Towers Architecture
+    Fashion Two-Tower Model for Unified Retrieval
 
-    This architecture uses specialized towers for different feature types:
+    This architecture uses separate user and item towers optimized for retrieval:
 
-    Tower 1 - Learned Features:
-        - Categorical embeddings: user_id, product_id, brand, category, gender (5 × 32 = 160-dim)
+    User Tower:
+        - user_id embedding (32-dim)
+        - Network: Dense(128, relu) -> Dropout(0.2) -> Dense(128, relu)
+        - L2 normalization
+        - Output: 128-dim normalized user embedding
+
+    Item Tower:
+        - Categorical embeddings: product_id, brand, category, gender (4 x 32 = 128-dim)
         - Numerical features: price_tier, like_count, product_age_days (3-dim)
-        - Total input: 163-dim
-        - Network: Dense(256, relu) → Dropout(0.2) → Dense(128, relu)
-        - Output: 128-dim
+        - Pre-computed embeddings: text (1024-dim) + image (512-dim)
+        - Total input: 1667-dim
+        - Network: Dense(512, relu) -> Dropout(0.2) -> Dense(256, relu) -> Dropout(0.1) -> Dense(128, relu)
+        - L2 normalization
+        - Output: 128-dim normalized item embedding
 
-    Tower 2 - Text Features:
-        - Pre-computed text embedding (1024-dim)
-        - Network: Dense(256, relu) → Dropout(0.1) → Dense(128, relu)
-        - Output: 128-dim
-
-    Tower 3 - Image Features:
-        - Pre-computed image embedding from CLIP (512-dim)
-        - Network: Dense(256, relu) → Dropout(0.1) → Dense(128, relu)
-        - Output: 128-dim
-
-    Fusion Layer:
-        - Concatenate all tower outputs (3 × 128 = 384-dim)
-        - Network: Dense(128, relu) → Dropout(0.2)
-        - Output: 128-dim → Task heads
+    Training Loss:
+        - Temperature-scaled in-batch negative softmax
+        - Similarity matrix: user_vec @ item_vec.T / temperature
+        - Labels: diagonal (user i matches item i)
+        - Cross-entropy loss over similarity matrix
     """
 
     def __init__(self, params):
@@ -259,11 +252,26 @@ class FashionRankingModelBase(MonolithModel):
         for s_name in embedding_features:
             self.create_embedding_feature_column(s_name, occurrence_threshold=0)
 
-        # Lookup all embeddings (32-dim each, total 160-dim)
+        # Lookup all embeddings (32-dim each)
         prod_emb, user_emb, brand_emb, category_emb, gender_emb = self.lookup_embedding_slice(
             features=embedding_features, slice_name='vec', slice_dim=32)
 
-        # === 2. Numerical features (normalized, 3-dim) ===
+        # === 2. USER TOWER (Simple - runs online per request) ===
+        # Input: user_id embedding (32-dim)
+        # Future: add liked_categories, session_product_ids for richer user representation
+        user_features = user_emb  # 32-dim
+
+        user_tower = tf.keras.Sequential([
+            tf.keras.layers.Dense(128, activation='relu', name='user_dense_1'),
+            tf.keras.layers.Dropout(0.2, name='user_dropout'),
+            tf.keras.layers.Dense(128, activation='relu', name='user_dense_2'),
+        ], name='user_tower')
+
+        user_vec = user_tower(user_features)  # (batch, 128)
+        user_vec = tf.nn.l2_normalize(user_vec, axis=1, name='user_vec_norm')
+
+        # === 3. ITEM TOWER (Complex - runs offline in batch) ===
+        # Numerical features (normalized, 3-dim)
         price_tier_norm = tf.expand_dims(tf.cast(features['price_tier'], tf.float32) / 5.0, axis=-1)
         log_like_count = tf.expand_dims(tf.math.log1p(tf.cast(features['like_count'], tf.float32)) / 10.0, axis=-1)
         product_age_norm = tf.expand_dims(tf.cast(features['product_age_days'], tf.float32) / 365.0, axis=-1)
@@ -272,120 +280,88 @@ class FashionRankingModelBase(MonolithModel):
             price_tier_norm,
             log_like_count,
             product_age_norm,
-        ], axis=1)
+        ], axis=1)  # 3-dim
 
-        # === 3. Pre-computed embeddings ===
-        text_emb = features['text_embedding']  # 768-dim
+        # Pre-computed embeddings
+        text_emb = features['text_embedding']  # 1024-dim
         image_emb = features['image_embedding']  # 512-dim
 
-        # === 4. Tower 1: Learned Features (163-dim → 128-dim) ===
-        learned_features = tf.concat([
-            user_emb,            # 32-dim
+        # Concatenate all item features
+        item_features = tf.concat([
             prod_emb,            # 32-dim
             brand_emb,           # 32-dim
             category_emb,        # 32-dim
             gender_emb,          # 32-dim
             numerical_features,  # 3-dim
-        ], axis=1)  # Total: 163-dim
+            text_emb,            # 1024-dim
+            image_emb,           # 512-dim
+        ], axis=1)  # Total: 1667-dim
 
-        learned_tower = tf.keras.Sequential([
-            tf.keras.layers.Dense(256, activation='relu', name='learned_dense_1'),
-            tf.keras.layers.Dropout(0.2, name='learned_dropout_1'),
-            tf.keras.layers.Dense(128, activation='relu', name='learned_dense_2'),
-        ], name='learned_tower')
+        item_tower = tf.keras.Sequential([
+            tf.keras.layers.Dense(512, activation='relu', name='item_dense_1'),
+            tf.keras.layers.Dropout(0.2, name='item_dropout_1'),
+            tf.keras.layers.Dense(256, activation='relu', name='item_dense_2'),
+            tf.keras.layers.Dropout(0.1, name='item_dropout_2'),
+            tf.keras.layers.Dense(128, activation='relu', name='item_dense_3'),
+        ], name='item_tower')
 
-        learned_repr = learned_tower(learned_features)  # 128-dim
+        item_vec = item_tower(item_features)  # (batch, 128)
+        item_vec = tf.nn.l2_normalize(item_vec, axis=1, name='item_vec_norm')
 
-        # === 5. Tower 2: Text Embeddings (1024-dim → 128-dim) ===
-        text_tower = tf.keras.Sequential([
-            tf.keras.layers.Dense(256, activation='relu', name='text_dense_1'),
-            tf.keras.layers.Dropout(0.1, name='text_dropout_1'),
-            tf.keras.layers.Dense(128, activation='relu', name='text_dense_2'),
-        ], name='text_tower')
+        # === 4. Two-Tower Loss: In-Batch Negative Softmax ===
+        # Compute similarity matrix: (batch, batch)
+        # similarity[i, j] = cosine similarity between user i and item j
+        similarity_matrix = tf.matmul(user_vec, item_vec, transpose_b=True)  # (batch, batch)
+        similarity_matrix = similarity_matrix / FLAGS.temperature
 
-        text_repr = text_tower(text_emb)  # 128-dim
+        # Labels: diagonal matrix (user i matches item i)
+        batch_size = tf.shape(user_vec)[0]
+        labels = tf.range(batch_size)  # [0, 1, 2, ..., batch_size-1]
 
-        # === 6. Tower 3: Image Embeddings (512-dim → 128-dim) ===
-        image_tower = tf.keras.Sequential([
-            tf.keras.layers.Dense(256, activation='relu', name='image_dense_1'),
-            tf.keras.layers.Dropout(0.1, name='image_dropout_1'),
-            tf.keras.layers.Dense(128, activation='relu', name='image_dense_2'),
-        ], name='image_tower')
+        # Cross-entropy loss: each row is a softmax over all items
+        retrieval_loss = tf.reduce_mean(
+            tf.nn.sparse_softmax_cross_entropy_with_logits(
+                labels=labels, logits=similarity_matrix))
 
-        image_repr = image_tower(image_emb)  # 128-dim
+        # Compute pairwise similarity for monitoring (diagonal elements)
+        similarity = tf.reduce_sum(user_vec * item_vec, axis=1)  # (batch,)
 
-        # === 7. Fusion Layer (384-dim → 128-dim) ===
-        # Concatenate all tower outputs
-        fused_features = tf.concat([
-            learned_repr,  # 128-dim
-            text_repr,     # 128-dim
-            image_repr,    # 128-dim
-        ], axis=1)  # Total: 384-dim
+        # Log metrics
+        tf.summary.scalar('losses/retrieval_loss', retrieval_loss)
+        tf.summary.scalar('metrics/avg_similarity', tf.reduce_mean(similarity))
+        tf.summary.scalar('metrics/user_vec_norm', tf.reduce_mean(tf.norm(user_vec, axis=1)))
+        tf.summary.scalar('metrics/item_vec_norm', tf.reduce_mean(tf.norm(item_vec, axis=1)))
 
-        fusion_layer = tf.keras.Sequential([
-            tf.keras.layers.Dense(128, activation='relu', name='fusion_dense_1'),
-            tf.keras.layers.Dropout(0.2, name='fusion_dropout_1'),
-        ], name='fusion_layer')
-
-        fused_repr = fusion_layer(fused_features)  # 128-dim
-
-        # === 8. Task-specific prediction heads ===
-        # Head 1: Like prediction (binary classification)
-        like_tower = tf.keras.Sequential([
-            tf.keras.layers.Dense(64, activation='relu', name='like_dense_1'),
-            tf.keras.layers.Dense(1, activation='sigmoid', name='like_pred')
-        ], name='like_tower')
-        like_pred = like_tower(fused_repr)
-
-        # Head 2: Dwell time prediction (regression in log space)
-        dwell_tower = tf.keras.Sequential([
-            tf.keras.layers.Dense(64, activation='relu', name='dwell_dense_1'),
-            tf.keras.layers.Dense(1, name='dwell_pred')  # Linear output for log values ~0-15
-        ], name='dwell_tower')
-        dwell_pred = dwell_tower(fused_repr)
-
-        # === 9. Multi-objective loss ===
-        label_binary = tf.cast(features['label'] > 0.5, tf.float32)
-        # Log-transform dwell time to compress range from 0-300000ms to ~0-15
-        dwell_time_log = tf.math.log1p(features['dwell_time_ms'])
-
-        # Like loss (binary cross-entropy)
-        like_pred_squeezed = tf.squeeze(like_pred, axis=-1)
-        like_loss = tf.reduce_mean(
-            tf.keras.losses.binary_crossentropy(label_binary, like_pred_squeezed)
-        )
-
-        # Dwell time loss (MSE on log-transformed values)
-        dwell_pred_squeezed = tf.squeeze(dwell_pred, axis=-1)
-        dwell_loss = tf.reduce_mean(tf.square(dwell_pred_squeezed - dwell_time_log))
-
-        # Combined loss (0.7 for like, 0.3 for dwell time)
-        total_loss = 0.7 * like_loss + 0.3 * dwell_loss
-
-        # Log individual losses for monitoring (TensorBoard)
-        tf.summary.scalar('losses/like_bce', like_loss)
-        tf.summary.scalar('losses/dwell_mse', dwell_loss)
-        tf.summary.scalar('losses/total', total_loss)
-
-        # Console logging of loss components every step (for debugging)
-        tf.print("[LOSS COMPONENTS] like_bce:", like_loss, "dwell_mse:", dwell_loss,
-                 "total:", total_loss, output_stream=sys.stderr)
+        # Console logging
+        tf.print("[TWO-TOWER LOSS] retrieval_loss:", retrieval_loss,
+                 "avg_similarity:", tf.reduce_mean(similarity),
+                 output_stream=sys.stderr)
 
         # Handle NaN
-        total_loss = tf.where(tf.math.is_nan(total_loss),
-                             tf.constant(0.0, dtype=tf.float32),
-                             total_loss)
+        retrieval_loss = tf.where(tf.math.is_nan(retrieval_loss),
+                                 tf.constant(0.0, dtype=tf.float32),
+                                 retrieval_loss)
 
-        # Store loss components as class attributes for custom logging hook
-        # These will be logged via LoggingTensorHook in main()
-        tf.compat.v1.add_to_collection('like_loss', like_loss)
-        tf.compat.v1.add_to_collection('dwell_loss', dwell_loss)
+        # === 5. Export named outputs for serving ===
+        # User tower serving signature (online inference per request)
+        self.add_extra_output(
+            name="user_tower",
+            outputs={
+                "user_vec": tf.identity(user_vec, name="user_vec"),
+                "user_embedding": tf.identity(user_emb, name="user_embedding"),
+            },
+        )
 
-        # === 10. Create combined score for ranking ===
-        # Normalize log dwell pred to ~0-1 range (log values are ~0-15)
-        combined_score = 0.7 * like_pred_squeezed + 0.3 * (dwell_pred_squeezed / 15.0)
+        # Item tower serving signature (offline batch pre-computation)
+        self.add_extra_output(
+            name="item_tower",
+            outputs={
+                "item_vec": tf.identity(item_vec, name="item_vec"),
+                "product_embedding": tf.identity(prod_emb, name="product_embedding"),
+            },
+        )
 
-        # === 11. Export named outputs for serving ===
+        # Debug outputs
         self.add_extra_output(
             name="features_for_join",
             outputs={
@@ -393,34 +369,30 @@ class FashionRankingModelBase(MonolithModel):
                 "product_embedding": tf.identity(prod_emb, name="product_embedding"),
                 "brand_embedding": tf.identity(brand_emb, name="brand_embedding"),
                 "category_embedding": tf.identity(category_emb, name="category_embedding"),
-                "learned_repr": tf.identity(learned_repr, name="learned_repr"),
-                "text_repr": tf.identity(text_repr, name="text_repr"),
-                "image_repr": tf.identity(image_repr, name="image_repr"),
-                "fused_repr": tf.identity(fused_repr, name="fused_repr"),
-                "like_score": tf.identity(like_pred_squeezed, name="like_score"),
-                "expected_dwell_time": tf.identity(dwell_pred_squeezed, name="expected_dwell_time"),
-                "combined_score": tf.identity(combined_score, name="combined_score"),
+                "user_vec": tf.identity(user_vec, name="user_vec"),
+                "item_vec": tf.identity(item_vec, name="item_vec"),
+                "similarity": tf.identity(similarity, name="similarity"),
             },
         )
 
-        opt = tf.compat.v1.train.AdagradOptimizer(0.05)
+        opt = tf.compat.v1.train.AdagradOptimizer(FLAGS.learning_rate)
 
         return EstimatorSpec(
-            label=label_binary,
-            pred=combined_score,
-            head_name='rank',
-            loss=total_loss,
+            label=features['label'],
+            pred=similarity,
+            head_name='two_tower',
+            loss=retrieval_loss,
             optimizer=opt,
             classification=False)
 
     @staticmethod
     def serving_input_receiver_fn():
-        """Define serving input format"""
+        """Default serving input - returns both towers' outputs"""
         input_ph = tf.compat.v1.placeholder(dtype=tf.string, shape=[None])
         raw_desc = {
-            'user_id': tf.io.FixedLenFeature([1], tf.int64),
-            'product_id': tf.io.FixedLenFeature([1], tf.int64),
-            'label': tf.io.FixedLenFeature([], tf.float32),
+            'user_id': tf.io.FixedLenFeature([1], tf.int64, default_value=[0]),
+            'product_id': tf.io.FixedLenFeature([1], tf.int64, default_value=[0]),
+            'label': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
             'dwell_time_ms': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
             'brand': tf.io.FixedLenFeature([], tf.string, default_value=''),
             'category': tf.io.FixedLenFeature([], tf.string, default_value=''),
@@ -428,8 +400,8 @@ class FashionRankingModelBase(MonolithModel):
             'price_tier': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'like_count': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'product_age_days': tf.io.FixedLenFeature([], tf.int64, default_value=0),
-            'text_embedding': tf.io.FixedLenFeature([TEXT_EMB_DIM], tf.float32),
-            'image_embedding': tf.io.FixedLenFeature([IMAGE_EMB_DIM], tf.float32),
+            'text_embedding': tf.io.FixedLenFeature([TEXT_EMB_DIM], tf.float32, default_value=[0.0] * TEXT_EMB_DIM),
+            'image_embedding': tf.io.FixedLenFeature([IMAGE_EMB_DIM], tf.float32, default_value=[0.0] * IMAGE_EMB_DIM),
         }
         parsed = tf.io.parse_example(input_ph, raw_desc)
         # Create RaggedTensors using from_row_splits (graph-mode compatible)
@@ -477,9 +449,123 @@ class FashionRankingModelBase(MonolithModel):
         }
         return tf.estimator.export.ServingInputReceiver(features, {'examples': input_ph})
 
+    @staticmethod
+    def serving_input_receiver_fn_user():
+        """User tower serving input - called online per request"""
+        input_ph = tf.compat.v1.placeholder(dtype=tf.string, shape=[None])
+        raw_desc = {
+            'user_id': tf.io.FixedLenFeature([1], tf.int64),
+            # Future: add liked_category_ids, session_product_ids
+        }
+        parsed = tf.io.parse_example(input_ph, raw_desc)
 
-class FashionRankingBatchTraining(FashionRankingModelBase):
-    """Batch training class for Fashion Ranking Model."""
+        # Create RaggedTensors using from_row_splits (graph-mode compatible)
+        batch_size = tf.shape(parsed['user_id'])[0]
+        row_splits = tf.cast(tf.range(batch_size + 1), tf.int64)
+
+        features = {
+            'user_id': tf.RaggedTensor.from_row_splits(
+                tf.reshape(parsed['user_id'], [-1]),
+                row_splits,
+                validate=False
+            ),
+            # Dummy values for item features (not used by user tower)
+            'product_id': tf.RaggedTensor.from_row_splits(
+                tf.zeros([batch_size], dtype=tf.int64),
+                row_splits,
+                validate=False
+            ),
+            'brand': tf.RaggedTensor.from_row_splits(
+                tf.zeros([batch_size], dtype=tf.int64),
+                row_splits,
+                validate=False
+            ),
+            'category': tf.RaggedTensor.from_row_splits(
+                tf.zeros([batch_size], dtype=tf.int64),
+                row_splits,
+                validate=False
+            ),
+            'gender': tf.RaggedTensor.from_row_splits(
+                tf.zeros([batch_size], dtype=tf.int64),
+                row_splits,
+                validate=False
+            ),
+            'label': tf.zeros([batch_size], dtype=tf.float32),
+            'dwell_time_ms': tf.zeros([batch_size], dtype=tf.float32),
+            'price_tier': tf.zeros([batch_size], dtype=tf.int64),
+            'like_count': tf.zeros([batch_size], dtype=tf.int64),
+            'product_age_days': tf.zeros([batch_size], dtype=tf.int64),
+            'text_embedding': tf.zeros([batch_size, TEXT_EMB_DIM], dtype=tf.float32),
+            'image_embedding': tf.zeros([batch_size, IMAGE_EMB_DIM], dtype=tf.float32),
+        }
+        return tf.estimator.export.ServingInputReceiver(features, {'examples': input_ph})
+
+    @staticmethod
+    def serving_input_receiver_fn_item():
+        """Item tower serving input - called offline in batch for pre-computation"""
+        input_ph = tf.compat.v1.placeholder(dtype=tf.string, shape=[None])
+        raw_desc = {
+            'product_id': tf.io.FixedLenFeature([1], tf.int64),
+            'brand': tf.io.FixedLenFeature([], tf.string, default_value=''),
+            'category': tf.io.FixedLenFeature([], tf.string, default_value=''),
+            'gender': tf.io.FixedLenFeature([], tf.string, default_value=''),
+            'price_tier': tf.io.FixedLenFeature([], tf.int64, default_value=0),
+            'like_count': tf.io.FixedLenFeature([], tf.int64, default_value=0),
+            'product_age_days': tf.io.FixedLenFeature([], tf.int64, default_value=0),
+            'text_embedding': tf.io.FixedLenFeature([TEXT_EMB_DIM], tf.float32),
+            'image_embedding': tf.io.FixedLenFeature([IMAGE_EMB_DIM], tf.float32),
+        }
+        parsed = tf.io.parse_example(input_ph, raw_desc)
+
+        # Create RaggedTensors using from_row_splits (graph-mode compatible)
+        batch_size = tf.shape(parsed['product_id'])[0]
+        row_splits = tf.cast(tf.range(batch_size + 1), tf.int64)
+
+        # Hash string features to int64 for embedding lookup
+        brand_hashed = tf.strings.to_hash_bucket_fast(parsed['brand'], 2**63 - 1)
+        category_hashed = tf.strings.to_hash_bucket_fast(parsed['category'], 2**63 - 1)
+        gender_hashed = tf.strings.to_hash_bucket_fast(parsed['gender'], 2**63 - 1)
+
+        features = {
+            'product_id': tf.RaggedTensor.from_row_splits(
+                tf.reshape(parsed['product_id'], [-1]),
+                row_splits,
+                validate=False
+            ),
+            'brand': tf.RaggedTensor.from_row_splits(
+                tf.reshape(brand_hashed, [-1]),
+                row_splits,
+                validate=False
+            ),
+            'category': tf.RaggedTensor.from_row_splits(
+                tf.reshape(category_hashed, [-1]),
+                row_splits,
+                validate=False
+            ),
+            'gender': tf.RaggedTensor.from_row_splits(
+                tf.reshape(gender_hashed, [-1]),
+                row_splits,
+                validate=False
+            ),
+            'price_tier': parsed['price_tier'],
+            'like_count': parsed['like_count'],
+            'product_age_days': parsed['product_age_days'],
+            'text_embedding': parsed['text_embedding'],
+            'image_embedding': parsed['image_embedding'],
+            # Dummy values for user features (not used by item tower)
+            'user_id': tf.RaggedTensor.from_row_splits(
+                tf.zeros([batch_size], dtype=tf.int64),
+                row_splits,
+                validate=False
+            ),
+            'label': tf.zeros([batch_size], dtype=tf.float32),
+            'dwell_time_ms': tf.zeros([batch_size], dtype=tf.float32),
+        }
+        return tf.estimator.export.ServingInputReceiver(features, {'examples': input_ph})
+
+
+class FashionTwoTowerBatchTraining(FashionTwoTowerModelBase):
+    """Batch training class for Fashion Two-Tower Model."""
 
     # Class-level variables to persist across Monolith's deepcopy operations
     _train_data_cache = None
@@ -520,19 +606,19 @@ class FashionRankingBatchTraining(FashionRankingModelBase):
             logging.info(f"BigQuery query: {query[:500]}...")  # Log first 500 chars
 
             # Load data once and cache train/val splits (use class-level vars to survive deepcopy)
-            if not FashionRankingBatchTraining._data_loaded_cache:
+            if not FashionTwoTowerBatchTraining._data_loaded_cache:
                 # Execute query and write to temp table
                 temp_table_id = self._execute_query_to_temp_table(query)
 
                 # Read from temp table and split into train/val
                 self._load_and_split_data(temp_table_id)
-                FashionRankingBatchTraining._data_loaded_cache = True
+                FashionTwoTowerBatchTraining._data_loaded_cache = True
 
             # Return appropriate split based on mode or _force_eval_mode flag
             # Monolith doesn't properly pass mode=EVAL, so we use a class-level flag
-            is_eval = FashionRankingBatchTraining._force_eval_mode
+            is_eval = FashionTwoTowerBatchTraining._force_eval_mode
             is_training = not is_eval
-            data = FashionRankingBatchTraining._train_data_cache if is_training else FashionRankingBatchTraining._val_data_cache
+            data = FashionTwoTowerBatchTraining._train_data_cache if is_training else FashionTwoTowerBatchTraining._val_data_cache
             split_name = "train" if is_training else "validation"
             logging.info(f"Returning {split_name} dataset with {len(data['user_id'])} samples (force_eval={is_eval})")
 
@@ -635,7 +721,7 @@ class FashionRankingBatchTraining(FashionRankingModelBase):
         import time
 
         bq_client = bigquery.Client(project=FLAGS.bq_project, location=FLAGS.bq_location)
-        temp_table_id = f"{FLAGS.bq_project}.{FLAGS.bq_dataset}.temp_batch_training_towers_{int(time.time())}"
+        temp_table_id = f"{FLAGS.bq_project}.{FLAGS.bq_dataset}.temp_batch_training_two_tower_{int(time.time())}"
 
         logging.info(f"Creating temp table: {temp_table_id} (location: {FLAGS.bq_location})")
         job_config = bigquery.QueryJobConfig(destination=temp_table_id)
@@ -733,8 +819,8 @@ class FashionRankingBatchTraining(FashionRankingModelBase):
         }
 
         # Split into train and validation (use class-level vars to survive deepcopy)
-        FashionRankingBatchTraining._train_data_cache = {k: v[train_indices] for k, v in all_data.items()}
-        FashionRankingBatchTraining._val_data_cache = {k: v[val_indices] for k, v in all_data.items()}
+        FashionTwoTowerBatchTraining._train_data_cache = {k: v[train_indices] for k, v in all_data.items()}
+        FashionTwoTowerBatchTraining._val_data_cache = {k: v[val_indices] for k, v in all_data.items()}
 
     def eval_input_fn(self, mode=None):
         """Input function that always returns validation data.
@@ -744,12 +830,12 @@ class FashionRankingBatchTraining(FashionRankingModelBase):
         """
         # Ensure data is loaded (reuse logic from input_fn)
         if FLAGS.bq_project and FLAGS.bq_dataset and FLAGS.bq_table:
-            if not FashionRankingBatchTraining._data_loaded_cache:
+            if not FashionTwoTowerBatchTraining._data_loaded_cache:
                 # This shouldn't happen if input_fn was called first for training
                 logging.warning("eval_input_fn called before data was loaded - calling input_fn first")
                 self.input_fn(tf.estimator.ModeKeys.TRAIN)
 
-        data = FashionRankingBatchTraining._val_data_cache
+        data = FashionTwoTowerBatchTraining._val_data_cache
         if data is None:
             logging.warning("No validation data available - returning empty dataset")
             return None
@@ -806,7 +892,7 @@ class FashionRankingBatchTraining(FashionRankingModelBase):
         return ds.batch(self._get_batch_size(), drop_remainder=True).map(_to_ragged).prefetch(tf.data.AUTOTUNE)
 
 
-class FashionRankingOnlineTraining(FashionRankingModelBase):
+class FashionTwoTowerOnlineTraining(FashionTwoTowerModelBase):
     """Online training from Kafka with product embedding lookup"""
 
     _product_embeddings_cache = None  # Class-level cache
@@ -865,7 +951,7 @@ class FashionRankingOnlineTraining(FashionRankingModelBase):
                 }
 
             cls._product_embeddings_cache = cache
-            logging.info(f"✓ Product embedding cache built: {len(cache)} products")
+            logging.info(f"Product embedding cache built: {len(cache)} products")
             return cache
 
         except Exception as e:
@@ -1047,172 +1133,6 @@ class FashionRankingOnlineTraining(FashionRankingModelBase):
         # drop_remainder=False processes all messages (last batch may be partial)
         return dataset.map(decode_protobuf_training_sample).batch(self._get_batch_size(), drop_remainder=False).repeat().map(_to_ragged).prefetch(tf.data.AUTOTUNE)
 
-    def create_online_training_dataset_protobuf(self, kafka_topics, kafka_group_id, kafka_servers):
-        """Create dataset from Kafka protobuf messages with 8-byte length prefix"""
-        # Import Example protobuf (already at top of file)
-
-        # Create Kafka dataset (same as JSON version)
-        dataset = create_plain_kafka_dataset(
-            topics=kafka_topics.split(','),
-            group_id=kafka_group_id,
-            servers=kafka_servers,
-            poll_batch_size=1,  # Return individual messages for protobuf decoding
-            stream_timeout=FLAGS.stream_timeout_ms,
-            configuration=[
-                f"sasl.mechanisms=PLAIN",
-                f"security.protocol=SASL_SSL",
-                f"sasl.username={os.getenv('CONFLUENT_API_KEY', FLAGS.kafka_username)}",
-                f"sasl.password={os.getenv('CONFLUENT_API_SECRET', FLAGS.kafka_password)}",
-            ],
-        )
-
-        def decode_protobuf_training_sample(kafka_message):
-            """Decode protobuf Example message (with 8-byte length prefix) using tf.py_function"""
-
-            def decode_pb(message_bytes):
-                """Python function to decode protobuf - executed in eager mode"""
-                try:
-                    # tf.py_function passes EagerTensor - convert to numpy array
-                    if hasattr(message_bytes, 'numpy'):
-                        message_bytes = message_bytes.numpy()
-
-                    # Handle empty messages (EOF markers from Kafka)
-                    if isinstance(message_bytes, np.ndarray) and message_bytes.shape[0] == 0:
-                        # Return zeros for empty messages
-                        return (
-                            np.array([0], dtype=np.int64), np.array([0], dtype=np.int64),
-                            np.float32(0.0), np.float32(0.0), np.array([0], dtype=np.int64),
-                            np.array([0], dtype=np.int64), np.array([0], dtype=np.int64),
-                            np.int64(0), np.int64(0), np.int64(0),
-                            np.array([0.0] * TEXT_EMB_DIM, dtype=np.float32),
-                            np.array([0.0] * IMAGE_EMB_DIM, dtype=np.float32),
-                        )
-
-                    # Extract bytes from numpy array (shape should be (1,))
-                    if isinstance(message_bytes, np.ndarray):
-                        message_bytes = message_bytes.item()
-
-                    # Ensure we have Python bytes
-                    if not isinstance(message_bytes, bytes):
-                        logging.warning(f"Unexpected message type: {type(message_bytes)}")
-                        return (
-                            np.array([0], dtype=np.int64), np.array([0], dtype=np.int64),
-                            np.float32(0.0), np.float32(0.0), np.array([0], dtype=np.int64),
-                            np.array([0], dtype=np.int64), np.array([0], dtype=np.int64),
-                            np.int64(0), np.int64(0), np.int64(0),
-                            np.array([0.0] * TEXT_EMB_DIM, dtype=np.float32),
-                            np.array([0.0] * IMAGE_EMB_DIM, dtype=np.float32),
-                        )
-
-                    # Parse 8-byte length prefix (little-endian unsigned long long)
-                    length = unpack('<Q', message_bytes[:8])[0]
-                    pb_bytes = message_bytes[8:]
-
-                    if len(pb_bytes) != length:
-                        logging.warning(f"Length mismatch: expected {length}, got {len(pb_bytes)}")
-
-                    # Deserialize Example protobuf
-                    example = Example()
-                    example.ParseFromString(pb_bytes)
-
-                    # Extract features by name from named_feature list
-                    features = {nf.name: nf.feature for nf in example.named_feature}
-
-                    # Extract IDs (fid_v2_list contains fixed64 values)
-                    user_id = features['user_id'].fid_v2_list.value[0] if 'user_id' in features else 0
-                    product_id = features['product_id'].fid_v2_list.value[0] if 'product_id' in features else 0
-
-                    # Extract embeddings (float_list contains float values)
-                    text_embedding = list(features['text_embedding'].float_list.value) if 'text_embedding' in features else [0.0] * TEXT_EMB_DIM
-                    image_embedding = list(features['image_embedding'].float_list.value) if 'image_embedding' in features else [0.0] * IMAGE_EMB_DIM
-
-                    # Extract other features
-                    brand = features['brand'].fid_v2_list.value[0] if 'brand' in features else 0
-                    category = features['category'].fid_v2_list.value[0] if 'category' in features else 0
-                    gender = features['gender'].fid_v2_list.value[0] if 'gender' in features else 0
-                    price_tier = features['price_tier'].int64_list.value[0] if 'price_tier' in features else 0
-                    dwell_time_ms = features['dwell_time_ms'].float_list.value[0] if 'dwell_time_ms' in features else 0.0
-
-                    # Extract label from Example.label
-                    label = example.label[0] if len(example.label) > 0 else 0.0
-
-                    # Return as numpy arrays (same format as JSON decoder)
-                    return (
-                        np.array([user_id], dtype=np.int64),
-                        np.array([product_id], dtype=np.int64),
-                        np.float32(label),
-                        np.float32(dwell_time_ms),
-                        np.array([brand], dtype=np.int64),
-                        np.array([category], dtype=np.int64),
-                        np.array([gender], dtype=np.int64),
-                        np.int64(price_tier),
-                        np.int64(0),  # like_count (placeholder)
-                        np.int64(0),  # product_age_days (placeholder)
-                        np.array(text_embedding, dtype=np.float32),
-                        np.array(image_embedding, dtype=np.float32),
-                    )
-                except Exception as e:
-                    logging.warning(f"Failed to decode protobuf training sample: {e}")
-                    # Return zeros for failed decode
-                    return (
-                        np.array([0], dtype=np.int64),
-                        np.array([0], dtype=np.int64),
-                        np.float32(0.0),
-                        np.float32(0.0),
-                        np.array([0], dtype=np.int64),
-                        np.array([0], dtype=np.int64),
-                        np.array([0], dtype=np.int64),
-                        np.int64(0),
-                        np.int64(0),
-                        np.int64(0),
-                        np.array([0.0] * TEXT_EMB_DIM, dtype=np.float32),
-                        np.array([0.0] * IMAGE_EMB_DIM, dtype=np.float32),
-                    )
-
-            # Wrap in tf.py_function - executed in eager mode within graph context
-            (user_id, product_id, label, dwell_time_ms, brand, category, gender,
-             price_tier, like_count, product_age_days, text_embedding, image_embedding) = tf.py_function(
-                decode_pb,
-                [kafka_message.message],
-                [tf.int64, tf.int64, tf.float32, tf.float32, tf.int64, tf.int64, tf.int64,
-                 tf.int64, tf.int64, tf.int64, tf.float32, tf.float32]
-            )
-
-            # Set shapes explicitly (required for .batch() to work correctly)
-            user_id.set_shape([1])
-            product_id.set_shape([1])
-            label.set_shape([])
-            dwell_time_ms.set_shape([])
-            brand.set_shape([1])
-            category.set_shape([1])
-            gender.set_shape([1])
-            price_tier.set_shape([])
-            like_count.set_shape([])
-            product_age_days.set_shape([])
-            text_embedding.set_shape([TEXT_EMB_DIM])
-            image_embedding.set_shape([IMAGE_EMB_DIM])
-
-            return {
-                'user_id': user_id,
-                'product_id': product_id,
-                'label': label,
-                'dwell_time_ms': dwell_time_ms,
-                'brand': brand,
-                'category': category,
-                'gender': gender,
-                'price_tier': price_tier,
-                'like_count': like_count,
-                'product_age_days': product_age_days,
-                'text_embedding': text_embedding,
-                'image_embedding': image_embedding,
-            }
-
-        # poll_batch_size=1 returns individual messages for protobuf decoding
-        # Then .batch() creates TensorFlow batches for training
-        # .repeat() allows continuous cycling through messages for streaming training
-        # drop_remainder=False processes all messages (last batch may be partial)
-        return dataset.map(decode_protobuf_training_sample).batch(self._get_batch_size(), drop_remainder=False).repeat().map(_to_ragged).prefetch(tf.data.AUTOTUNE)
-
 
 def export_and_register_model(estimator, tf_conf):
     """Export trained model for TensorFlow Serving and register with ZooKeeper"""
@@ -1225,9 +1145,9 @@ def export_and_register_model(estimator, tf_conf):
             name=FLAGS.model_name,
             dense_only=False
         )
-        logging.info("✓ Model exported successfully")
+        logging.info("Model exported successfully")
     except Exception as e:
-        logging.error(f"✗ Model export failed: {e}")
+        logging.error(f"Model export failed: {e}")
         raise
 
     # Only primary worker registers with ZooKeeper
@@ -1262,7 +1182,7 @@ def export_and_register_model(estimator, tf_conf):
                         overwrite=True,
                         arch="entry_ps"
                     )
-                    logging.info(f"✓ Declared saved model: {model_name}")
+                    logging.info(f"Declared saved model: {model_name}")
 
                     # Step 2: Publish to layout (makes models discoverable by inference)
                     layout_path = f"/{bzid}/layouts/{layout_name}"
@@ -1272,10 +1192,10 @@ def export_and_register_model(estimator, tf_conf):
                         layout_path=layout_path,
                         action='pub'
                     )
-                    logging.info(f"✓ Published model to layout: {layout_path}")
-                    logging.info(f"✓ Model registration complete - inference servers should discover model")
+                    logging.info(f"Published model to layout: {layout_path}")
+                    logging.info(f"Model registration complete - inference servers should discover model")
                 else:
-                    logging.error(f"✗ Export base does not exist: {export_base}")
+                    logging.error(f"Export base does not exist: {export_base}")
 
             finally:
                 bd.stop()
@@ -1308,8 +1228,9 @@ def main(_argv):
             pass
 
     logging.info(f"FLAGS.training_type: {FLAGS.training_type}")
-    logging.info("Architecture: Separate Towers (Learned + Text + Image)")
+    logging.info("Architecture: Two-Tower Unified Retrieval (User Tower + Item Tower)")
     logging.info(f"Model checkpoints will be saved to: {FLAGS.model_dir}")
+    logging.info(f"Temperature: {FLAGS.temperature}, Learning rate: {FLAGS.learning_rate}")
 
     # Determine if running locally (no PS/workers in TF_CONFIG)
     is_local = len(tf_conf.get('cluster', {}).get('ps', [])) == 0 and get_worker_count(tf_conf) <= 1
@@ -1317,7 +1238,7 @@ def main(_argv):
     config = RunnerConfig(
         discovery_type=ServiceDiscoveryType.PRIMUS,  # Use PRIMUS for TF_CONFIG-based PS/Worker discovery
         unified_serving=True,  # CRITICAL: Use ZKBackend for parameter sync (watches /binding/ path)
-        model_name="fashion_towers_dist",  # Must match model registered in ZK by batch training
+        model_name="fashion_two_tower",  # Must match model registered in ZK by batch training
         tf_config=raw_tf_conf,
         model_dir=FLAGS.model_dir,
         save_checkpoints_steps=500,  # Checkpoint frequently for preemptible VMs
@@ -1331,22 +1252,18 @@ def main(_argv):
         server_type=tf_conf.get('task', {}).get('type', '') or 'worker',
         index=tf_conf.get('task', {}).get('index', 0),
         zk_server=FLAGS.zk_server or os.environ.get('ZK_SERVERS', ''),
-        base_name="fashion_towers",
+        base_name="fashion_two_tower",
         bzid="monolith_serving_test",
         is_local=is_local,
     )
 
     if FLAGS.training_type == 'batch':
-        params = FashionRankingBatchTraining.params().instantiate()
+        params = FashionTwoTowerBatchTraining.params().instantiate()
     else:
-        params = FashionRankingOnlineTraining.params().instantiate()
+        params = FashionTwoTowerOnlineTraining.params().instantiate()
         config.enable_realtime_training = True
 
     estimator = Estimator(params, config)
-
-    # NOTE: Parameter sync hook is automatically added by cpu_training.py:2257
-    # when unified_serving=True. The estimator creates ZKBackend which watches
-    # /{bzid}/binding/{model_name}/* for inference server bindings.
 
     # Setup graceful shutdown handler for preemptible VMs
     def create_shutdown_handler():
@@ -1362,7 +1279,7 @@ def main(_argv):
     import signal
     signal.signal(signal.SIGTERM, create_shutdown_handler())  # K8s preemption
     signal.signal(signal.SIGINT, create_shutdown_handler())   # Ctrl+C
-    logging.info("✓ Graceful shutdown handlers registered for preemptible VMs")
+    logging.info("Graceful shutdown handlers registered for preemptible VMs")
 
     if FLAGS.training_type == 'batch':
         logging.info("=" * 60)
@@ -1375,7 +1292,7 @@ def main(_argv):
         estimator.train(max_steps=FLAGS.max_steps, hooks=params._training_hooks)
 
         logging.info("=" * 60)
-        logging.info("✓ BATCH TRAINING COMPLETE")
+        logging.info("BATCH TRAINING COMPLETE")
         logging.info("=" * 60)
 
         # Export model and register with ZooKeeper

@@ -1,0 +1,122 @@
+apiVersion: kubeflow.org/v1
+kind: TFJob
+metadata:
+  name: fashion-two-tower-batch
+  namespace: default
+spec:
+  runPolicy:
+    cleanPodPolicy: None
+    backoffLimit: 10
+    ttlSecondsAfterFinished: 86400
+  tfReplicaSpecs:
+    PS:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        metadata:
+          labels:
+            app: fashion-two-tower
+            role: ps
+        spec:
+          containers:
+          - name: tensorflow
+            image: gcr.io/__PROJECT_ID__/monolith-fashion-two-tower:latest
+            imagePullPolicy: IfNotPresent
+            command: ["python"]
+            args:
+              - "/fashion_model_two_tower.py"
+              - "--training_type=batch"
+              - "--model_dir=/checkpoints/fashion_two_tower"
+              - "--model_name=fashion_two_tower"
+              - "--batch_size=128"
+              # BigQuery Storage API flags
+              - "--bq_project=__BQ_PROJECT__"
+              - "--bq_dataset=__BQ_DATASET__"
+              - "--bq_table=__BQ_TABLE__"
+              - "--bq_products_dataset=__BQ_PRODUCTS_DATASET__"
+              - "--bq_products_table=__BQ_PRODUCTS_TABLE__"
+              - "--bq_location=__BQ_LOCATION__"
+              - "--bq_parallelism=8"
+              - "--bq_use_sql_query=true"
+              # Embedding filtering (CRITICAL for two-tower model)
+              - "--bq_filter_missing_embeddings=true"
+              # Training period: last 30 days
+              - "--bq_days_back=30"
+              # Training parameters
+              - "--max_steps=150000"
+              - "--save_checkpoints_steps=10000"
+            env:
+              - name: ZK_SERVERS
+                value: "monolith-zookeeper-client.default.svc.cluster.local:2181"
+              - name: TF_CPP_MIN_LOG_LEVEL
+                value: "1"
+            resources:
+              requests:
+                cpu: "1"
+                memory: "4Gi"
+              limits:
+                cpu: "2"
+                memory: "8Gi"
+            volumeMounts:
+              - name: checkpoint-volume
+                mountPath: /checkpoints
+          volumes:
+            - name: checkpoint-volume
+              persistentVolumeClaim:
+                claimName: monolith-checkpoint-pvc
+
+    Worker:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        metadata:
+          labels:
+            app: fashion-two-tower
+            role: worker
+        spec:
+          containers:
+          - name: tensorflow
+            image: gcr.io/__PROJECT_ID__/monolith-fashion-two-tower:latest
+            imagePullPolicy: IfNotPresent
+            command: ["python"]
+            args:
+              - "/fashion_model_two_tower.py"
+              - "--training_type=batch"
+              - "--model_dir=/checkpoints/fashion_two_tower"
+              - "--model_name=fashion_two_tower"
+              - "--batch_size=128"
+              # BigQuery Storage API flags
+              - "--bq_project=__BQ_PROJECT__"
+              - "--bq_dataset=__BQ_DATASET__"
+              - "--bq_table=__BQ_TABLE__"
+              - "--bq_products_dataset=__BQ_PRODUCTS_DATASET__"
+              - "--bq_products_table=__BQ_PRODUCTS_TABLE__"
+              - "--bq_location=__BQ_LOCATION__"
+              - "--bq_parallelism=8"
+              - "--bq_use_sql_query=true"
+              # Embedding filtering (CRITICAL for two-tower model)
+              - "--bq_filter_missing_embeddings=true"
+              # Training period: last 30 days
+              - "--bq_days_back=30"
+              # Training parameters
+              - "--max_steps=150000"
+              - "--save_checkpoints_steps=10000"
+            env:
+              - name: ZK_SERVERS
+                value: "monolith-zookeeper-client.default.svc.cluster.local:2181"
+              - name: TF_CPP_MIN_LOG_LEVEL
+                value: "1"
+            resources:
+              requests:
+                cpu: "2"
+                memory: "8Gi"
+              limits:
+                cpu: "4"
+                memory: "16Gi"
+            volumeMounts:
+              - name: checkpoint-volume
+                mountPath: /checkpoints
+          volumes:
+            - name: checkpoint-volume
+              persistentVolumeClaim:
+                claimName: monolith-checkpoint-pvc

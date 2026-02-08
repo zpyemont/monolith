@@ -11,16 +11,17 @@ COPY demo.conf /demo.conf
 COPY monolith/agent_service/agent_controller.py /usr/local/lib/python3.8/site-packages/monolith/agent_service/agent_controller.py
 COPY train_and_register_model.sh /train_and_register_model.sh
 COPY conf/platform_config_file.cfg /conf/platform_config_file.cfg
+COPY json_to_tf_converter.py /json_to_tf_converter.py
 
 # ConfigMap model registry files no longer needed - using ZooKeeper instead
 
 RUN ln -s /usr/local/lib/python3.8/site-packages/monolith/agent_service/agent.py /agent.py
 
-# Install TensorFlow I/O for BigQuery Storage API ingestion (compatible with TF 2.4.x)
+# Install TensorFlow I/O for BigQuery Storage API ingestion (compatible with TF 2.11.x)
 RUN python3 -m pip install --no-cache-dir \
-    tensorflow-io==0.17.0 \
-    google-cloud-bigquery \
-    google-cloud-bigquery-storage
+    tensorflow-io==0.28.0 \
+    google-cloud-bigquery==3.11.4 \
+    google-cloud-bigquery-storage==2.20.0
 
 # Ensure SSL certificates are available for Kafka SSL connections
 RUN apt-get update && apt-get install -y \

@@ -94,10 +94,24 @@ class ParameterSyncHook(session_run_hook.SessionRunHook):
 
   def before_run(self, run_context):
     cur_time = time.time()
+    # File-based trace logging
+    try:
+      with open('/tmp/parameter_sync_hook_trace.txt', 'a') as f:
+        f.write(f"{cur_time}: BEFORE_RUN called, last_refresh={self._last_refresh_time}, interval={self._refresh_interval}, will_refresh={cur_time - self._last_refresh_time >= self._refresh_interval}\n")
+    except:
+      pass
+
     if cur_time - self._last_refresh_time >= self._refresh_interval:
+      logging.info(f"TRACE-HOOK-REFRESH: Refreshing sync config for ps_{self._ps_index}")
       self._sync_config = refresh_sync_config(self._sync_backend,
                                               self._ps_index)
       self._last_refresh_time = cur_time
+      # File-based trace after refresh
+      try:
+        with open('/tmp/parameter_sync_hook_trace.txt', 'a') as f:
+          f.write(f"{cur_time}: REFRESH_COMPLETE, config_len={len(self._sync_config) if self._sync_config else 0}\n")
+      except:
+        pass
 
     return session_run_hook.SessionRunArgs(
         fetches=self._sync_run_step,

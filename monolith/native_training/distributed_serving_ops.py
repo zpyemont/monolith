@@ -100,6 +100,7 @@ def parameter_sync_client_from_config(
 def refresh_sync_config(sync_backend: SyncBackend, ps_index: int) -> bytes:
   saved_model, online_ps_replicas = sync_backend.get_sync_targets(
       f"ps_{ps_index}")
+  logging.info(f"TRACE-REFRESH-SYNC-CONFIG: saved_model={saved_model}, replicas={online_ps_replicas}, type={type(online_ps_replicas)}")
   config = parameter_sync_pb2.ClientConfig()
   if isinstance(online_ps_replicas, list):
     config.targets.extend(online_ps_replicas)
@@ -110,6 +111,7 @@ def refresh_sync_config(sync_backend: SyncBackend, ps_index: int) -> bytes:
   config.model_name = saved_model
   config.signature_name = "hashtable_assign"
   config.timeout_in_ms = 3000
+  logging.info(f"TRACE-REFRESH-SYNC-CONFIG-RESULT: config.targets={list(config.targets)}, len={len(config.targets)}")
   return config.SerializeToString()
 
 

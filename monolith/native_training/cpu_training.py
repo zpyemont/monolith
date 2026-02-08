@@ -93,7 +93,9 @@ from monolith.native_training.hooks import session_hooks
 from monolith.native_training.hooks import feature_engineering_hooks
 from monolith.native_training.hooks.server import server_lib as server_hook_lib
 from monolith.native_training.metric import cli
-from monolith.native_training.metric.metric_hook import Tf2ProfilerHook, NVProfilerHook
+from monolith.native_training.metric.metric_hook import Tf2ProfilerHook
+# NVProfilerHook not available in base image - commented out for compatibility
+# from monolith.native_training.metric.metric_hook import NVProfilerHook
 from monolith.native_training.metric.metric_hook import ByteCCLTelemetryHook
 from monolith.native_training.metric.metric_hook import ThroughputMetricHook
 from monolith.native_training.model_export import export_hooks
@@ -380,7 +382,7 @@ def get_req_time(features):
   else:
     return None
 
-@gflags_utils.LinkDataclassToFlags(linked_map={"use_dataservice": "dataset_use_dataservice"})
+# @gflags_utils.LinkDataclassToFlags decorator removed for base image compatibility
 @dataclasses.dataclass
 class CpuTrainingConfig:
   """The CPU training config.
@@ -1287,11 +1289,12 @@ class CpuTraining:
             Tf2ProfilerHook(
                 logdir=model_dir, init_step_range=[start_step, end_step], save_steps=save_steps))
 
-      if self.config.profile_with_nvprof_from_to and is_chief(self.config):
-        s, e = self.config.profile_with_nvprof_from_to.split(',')
-        save_steps = self.config.profile_save_steps_interval
-        hooks.append(
-            NVProfilerHook(init_step_range=[int(s), int(e)], save_steps=save_steps))
+      # NVProfilerHook not available in base image - disabled for compatibility
+      # if self.config.profile_with_nvprof_from_to and is_chief(self.config):
+      #   s, e = self.config.profile_with_nvprof_from_to.split(',')
+      #   save_steps = self.config.profile_save_steps_interval
+      #   hooks.append(
+      #       NVProfilerHook(init_step_range=[int(s), int(e)], save_steps=save_steps))
 
       if self._params.metrics.enable_throughput_hook and is_chief(self.config):
         hooks.append(
@@ -2020,7 +2023,23 @@ def distributed_train(config: DistributedCpuTrainingConfig,
   if isinstance(discovery, (MLPServiceDiscovery, TfConfigServiceDiscovery)):
     addr = discovery.addr
     config.index = discovery.index
-    server = tf.distribute.Server({"local": [addr]}, config=server_config)
+    # For TfConfigServiceDiscovery with DNS names, resolve to IP but keep the port
+    # TensorFlow Server needs IP:port, not DNS:port
+    if ':' in addr and not addr.startswith('['):  # Has port and not IPv6
+      hostname, port_str = addr.rsplit(':', 1)
+      # Try to get IP, but if it fails (no DNS resolution), bind to all interfaces
+      try:
+        import socket as sock_module
+        ip_addr = sock_module.gethostbyname(hostname)
+        bind_addr = f"{ip_addr}:{port_str}"
+      except:
+        # If DNS resolution fails, bind to 0.0.0.0:port to accept connections on all interfaces
+        bind_addr = f"0.0.0.0:{port_str}"
+    else:
+      bind_addr = addr
+    server = tf.distribute.Server({"local": [bind_addr]}, config=server_config)
+    # Get actual bound address from server.target
+    addr = urlparse(server.target).netloc
   else:
     assert isinstance(discovery, ServiceDiscovery)
     ip = yarn_runtime.get_local_host()
