@@ -9,8 +9,10 @@ with a unified two-tower architecture where:
 - Retrieval order = Ranking order (no separate ranking step)
 
 Architecture:
-    User Tower (32-dim) -> Dense(128, relu) -> Dropout(0.2) -> Dense(128) -> L2 normalize
-    Item Tower (1667-dim) -> Dense(512) -> Dropout(0.2) -> Dense(256) -> Dropout(0.1) -> Dense(128) -> L2 normalize
+    User Tower (32-dim) -> Dense(128, relu) -> Dense(128, linear) -> L2 normalize
+    Item Tower (259-dim) -> Dense(256, relu) -> Dense(128, linear) -> L2 normalize
+      CLIP text (1024) -> Dense(64, relu) projection
+      CLIP image (512) -> Dense(64, relu) projection
     Loss: temperature-scaled softmax over similarity matrix with in-batch negatives
 
 Input format (CSV):
@@ -46,6 +48,7 @@ from monolith.native_training.model_export.export_context import ExportMode
 from monolith.agent_service.agent_controller import declare_saved_model, map_model_to_layout
 from monolith.agent_service.backends import ZKBackend
 from monolith.native_training.runtime.ops import gen_monolith_ops
+from monolith.native_training import entry
 
 # Training/stream flags
 flags.DEFINE_enum('training_type', 'online', ['batch', 'online', 'stdin'], 'Type of training to launch')
@@ -74,8 +77,9 @@ flags.DEFINE_integer('batch_epochs', 3, 'Number of epochs for batch training (0 
 
 # Training configuration
 flags.DEFINE_integer('max_steps', 10000, 'Maximum training steps for batch training')
-flags.DEFINE_float('temperature', 0.05, 'Temperature for softmax loss')
-flags.DEFINE_float('learning_rate', 0.05, 'Learning rate for Adagrad optimizer')
+flags.DEFINE_float('learning_rate', 0.001, 'Learning rate for dense Adam optimizer')
+flags.DEFINE_float('sparse_learning_rate', 0.01, 'Learning rate for sparse embedding optimizer (10x dense)')
+flags.DEFINE_integer('warmup_steps', 500, 'Linear LR warmup steps')
 
 FLAGS = flags.FLAGS
 
@@ -169,10 +173,12 @@ def _parse_csv_line(line):
     # Text embedding (1024 dimensions)
     text_emb_parts = parts[10:10+TEXT_EMB_DIM]
     text_embedding = tf.strings.to_number(text_emb_parts, out_type=tf.float32)
+    text_embedding = tf.ensure_shape(text_embedding, [TEXT_EMB_DIM])
 
     # Image embedding (512 dimensions)
     image_emb_parts = parts[10+TEXT_EMB_DIM:10+TEXT_EMB_DIM+IMAGE_EMB_DIM]
     image_embedding = tf.strings.to_number(image_emb_parts, out_type=tf.float32)
+    image_embedding = tf.ensure_shape(image_embedding, [IMAGE_EMB_DIM])
 
     return {
         'user_id': tf.reshape(uid, [1]),
@@ -222,16 +228,16 @@ class FashionTwoTowerModelBase(MonolithModel):
 
     User Tower:
         - user_id embedding (32-dim)
-        - Network: Dense(128, relu) -> Dropout(0.2) -> Dense(128, relu)
+        - Network: Dense(128, relu) -> Dense(128, linear)
         - L2 normalization
         - Output: 128-dim normalized user embedding
 
     Item Tower:
         - Categorical embeddings: product_id, brand, category, gender (4 x 32 = 128-dim)
         - Numerical features: price_tier, like_count, product_age_days (3-dim)
-        - Pre-computed embeddings: text (1024-dim) + image (512-dim)
-        - Total input: 1667-dim
-        - Network: Dense(512, relu) -> Dropout(0.2) -> Dense(256, relu) -> Dropout(0.1) -> Dense(128, relu)
+        - Pre-computed embeddings: text (1024 -> 64 projection) + image (512 -> 64 projection)
+        - Total input: 259-dim
+        - Network: Dense(256, relu) -> Dense(128, linear)
         - L2 normalization
         - Output: 128-dim normalized item embedding
 
@@ -253,8 +259,14 @@ class FashionTwoTowerModelBase(MonolithModel):
             self.create_embedding_feature_column(s_name, occurrence_threshold=0)
 
         # Lookup all embeddings (32-dim each)
+        # Sparse embeddings use 10x higher LR than dense layers (industry practice:
+        # Pinterest, NVIDIA use 10-50x). Sparse params get infrequent updates and
+        # need larger steps to learn meaningful representations.
+        emb_optimizer = entry.AdamOptimizer(
+            learning_rate=FLAGS.sparse_learning_rate)
         prod_emb, user_emb, brand_emb, category_emb, gender_emb = self.lookup_embedding_slice(
-            features=embedding_features, slice_name='vec', slice_dim=32)
+            features=embedding_features, slice_name='vec', slice_dim=32,
+            optimizer=emb_optimizer)
 
         # === 2. USER TOWER (Simple - runs online per request) ===
         # Input: user_id embedding (32-dim)
@@ -263,11 +275,12 @@ class FashionTwoTowerModelBase(MonolithModel):
 
         user_tower = tf.keras.Sequential([
             tf.keras.layers.Dense(128, activation='relu', name='user_dense_1'),
-            tf.keras.layers.Dropout(0.2, name='user_dropout'),
-            tf.keras.layers.Dense(128, activation='relu', name='user_dense_2'),
+            tf.keras.layers.Dense(128, activation=None, name='user_dense_2'),
+            tf.keras.layers.BatchNormalization(name='user_bn'),
         ], name='user_tower')
 
-        user_vec = user_tower(user_features)  # (batch, 128)
+        is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+        user_vec = user_tower(user_features, training=is_training)  # (batch, 128)
         user_vec = tf.nn.l2_normalize(user_vec, axis=1, name='user_vec_norm')
 
         # === 3. ITEM TOWER (Complex - runs offline in batch) ===
@@ -282,65 +295,88 @@ class FashionTwoTowerModelBase(MonolithModel):
             product_age_norm,
         ], axis=1)  # 3-dim
 
-        # Pre-computed embeddings
+        # Pre-computed embeddings — project down to balance with learned features.
+        # Raw CLIP (1536 dims) would dominate learned embeddings (128 dims at [-0.05, 0.05]),
+        # starving collaborative filtering signals of gradient flow.
         text_emb = features['text_embedding']  # 1024-dim
         image_emb = features['image_embedding']  # 512-dim
 
-        # Concatenate all item features
+        text_proj = tf.keras.layers.Dense(64, activation='relu', name='text_projection')(text_emb)
+        image_proj = tf.keras.layers.Dense(64, activation='relu', name='image_projection')(image_emb)
+
+        # Concatenate all item features (balanced: 131 learned + 128 projected)
         item_features = tf.concat([
             prod_emb,            # 32-dim
             brand_emb,           # 32-dim
             category_emb,        # 32-dim
             gender_emb,          # 32-dim
             numerical_features,  # 3-dim
-            text_emb,            # 1024-dim
-            image_emb,           # 512-dim
-        ], axis=1)  # Total: 1667-dim
+            text_proj,           # 64-dim (was 1024)
+            image_proj,          # 64-dim (was 512)
+        ], axis=1)  # Total: 259-dim
 
         item_tower = tf.keras.Sequential([
-            tf.keras.layers.Dense(512, activation='relu', name='item_dense_1'),
-            tf.keras.layers.Dropout(0.2, name='item_dropout_1'),
-            tf.keras.layers.Dense(256, activation='relu', name='item_dense_2'),
-            tf.keras.layers.Dropout(0.1, name='item_dropout_2'),
-            tf.keras.layers.Dense(128, activation='relu', name='item_dense_3'),
+            tf.keras.layers.Dense(256, activation='relu', name='item_dense_1'),
+            tf.keras.layers.Dense(128, activation=None, name='item_dense_2'),
+            tf.keras.layers.BatchNormalization(name='item_bn'),
         ], name='item_tower')
 
-        item_vec = item_tower(item_features)  # (batch, 128)
+        item_vec = item_tower(item_features, training=is_training)  # (batch, 128)
         item_vec = tf.nn.l2_normalize(item_vec, axis=1, name='item_vec_norm')
+
+        # === LR Warmup: compute here so it's available for logging ===
+        global_step = tf.compat.v1.train.get_or_create_global_step()
+        warmup_factor = tf.minimum(
+            tf.cast(global_step, tf.float32) / tf.cast(FLAGS.warmup_steps, tf.float32), 1.0)
+        current_lr = FLAGS.learning_rate * warmup_factor
 
         # === 4. Two-Tower Loss: In-Batch Negative Softmax ===
         # Compute similarity matrix: (batch, batch)
         # similarity[i, j] = cosine similarity between user i and item j
         similarity_matrix = tf.matmul(user_vec, item_vec, transpose_b=True)  # (batch, batch)
-        similarity_matrix = similarity_matrix / FLAGS.temperature
+
+        # CLIP-style learnable temperature: log_temperature is optimized via gradient descent.
+        # Initialized to log(1/0.07) ≈ 2.659 (CLIP's default). Clamped so logit_scale ≤ 100
+        # to prevent training instability. The model learns its own optimal temperature.
+        logit_scale = tf.compat.v1.get_variable(
+            'logit_scale', shape=[], dtype=tf.float32,
+            initializer=tf.constant_initializer(np.log(1.0 / 0.07)))
+        logit_scale = tf.minimum(logit_scale, np.log(100.0))
+        similarity_matrix = similarity_matrix * tf.exp(logit_scale)
 
         # Labels: diagonal matrix (user i matches item i)
         batch_size = tf.shape(user_vec)[0]
         labels = tf.range(batch_size)  # [0, 1, 2, ..., batch_size-1]
 
         # Cross-entropy loss: each row is a softmax over all items
-        retrieval_loss = tf.reduce_mean(
-            tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=labels, logits=similarity_matrix))
+        # Mask negative samples (label=0) so they don't contribute diagonal loss,
+        # but DO remain in the batch as in-batch negatives for positive samples.
+        per_sample_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            labels=labels, logits=similarity_matrix)
+        positive_mask = tf.cast(tf.greater(features['label'], 0.5), tf.float32)
+        retrieval_loss = tf.reduce_sum(per_sample_loss * positive_mask) / tf.maximum(
+            tf.reduce_sum(positive_mask), 1.0)
 
         # Compute pairwise similarity for monitoring (diagonal elements)
         similarity = tf.reduce_sum(user_vec * item_vec, axis=1)  # (batch,)
 
         # Log metrics
+        learned_temperature = 1.0 / tf.exp(logit_scale)
         tf.summary.scalar('losses/retrieval_loss', retrieval_loss)
         tf.summary.scalar('metrics/avg_similarity', tf.reduce_mean(similarity))
         tf.summary.scalar('metrics/user_vec_norm', tf.reduce_mean(tf.norm(user_vec, axis=1)))
         tf.summary.scalar('metrics/item_vec_norm', tf.reduce_mean(tf.norm(item_vec, axis=1)))
+        tf.summary.scalar('metrics/temperature', learned_temperature)
+        tf.summary.scalar('metrics/learning_rate', current_lr)
 
         # Console logging
         tf.print("[TWO-TOWER LOSS] retrieval_loss:", retrieval_loss,
                  "avg_similarity:", tf.reduce_mean(similarity),
+                 "temperature:", learned_temperature,
                  output_stream=sys.stderr)
 
-        # Handle NaN
-        retrieval_loss = tf.where(tf.math.is_nan(retrieval_loss),
-                                 tf.constant(0.0, dtype=tf.float32),
-                                 retrieval_loss)
+        # Crash on NaN instead of silently zeroing gradients
+        retrieval_loss = tf.debugging.check_numerics(retrieval_loss, "retrieval_loss is NaN/Inf")
 
         # === 5. Export named outputs for serving ===
         # User tower serving signature (online inference per request)
@@ -375,7 +411,7 @@ class FashionTwoTowerModelBase(MonolithModel):
             },
         )
 
-        opt = tf.compat.v1.train.AdagradOptimizer(FLAGS.learning_rate)
+        opt = tf.compat.v1.train.AdamOptimizer(current_lr)
 
         return EstimatorSpec(
             label=features['label'],
@@ -888,6 +924,10 @@ class FashionTwoTowerBatchTraining(FashionTwoTowerModelBase):
                     'image_embedding': tf.TensorSpec([IMAGE_EMB_DIM], tf.float32),
                 }
             )
+        # Repeat then shuffle so each epoch gets independently shuffled.
+        # Buffer=125000 covers the full dataset for true global shuffling.
+        epochs = FLAGS.batch_epochs if FLAGS.batch_epochs > 0 else None
+        ds = ds.repeat(epochs).shuffle(125000)
         # Apply _to_ragged AFTER batching - creates graph-mode RaggedTensors
         return ds.batch(self._get_batch_size(), drop_remainder=True).map(_to_ragged).prefetch(tf.data.AUTOTUNE)
 
@@ -1230,7 +1270,7 @@ def main(_argv):
     logging.info(f"FLAGS.training_type: {FLAGS.training_type}")
     logging.info("Architecture: Two-Tower Unified Retrieval (User Tower + Item Tower)")
     logging.info(f"Model checkpoints will be saved to: {FLAGS.model_dir}")
-    logging.info(f"Temperature: {FLAGS.temperature}, Learning rate: {FLAGS.learning_rate}")
+    logging.info(f"Temperature: learnable (CLIP-style, init=0.07), Dense LR: {FLAGS.learning_rate}, Sparse LR: {FLAGS.sparse_learning_rate}, Warmup: {FLAGS.warmup_steps} steps")
 
     # Determine if running locally (no PS/workers in TF_CONFIG)
     is_local = len(tf_conf.get('cluster', {}).get('ps', [])) == 0 and get_worker_count(tf_conf) <= 1

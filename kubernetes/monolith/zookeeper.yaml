@@ -35,6 +35,13 @@ spec:
       labels:
         app: monolith-zookeeper
     spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cloud.google.com/gke-spot
+                operator: DoesNotExist
       containers:
       - name: zookeeper
         image: zookeeper:3.8

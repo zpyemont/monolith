@@ -1,13 +1,13 @@
 """
 Pre-compute item tower embeddings for all active products.
 
-Loads the exported two-tower model's item tower signature,
-runs inference on all active products, and writes the 128-dim
-learned embeddings to PostgreSQL embeddings.product_vectors.
+Calls the two-tower model's item_tower signature via gRPC on
+TF Serving, runs inference on all active products, and writes
+the 128-dim learned embeddings to PostgreSQL embeddings.product_vectors.
 
 Usage:
     python precompute_item_embeddings.py \
-        --model_dir /checkpoints/fashion_two_tower/exported_models/entry/ \
+        --serving_address monolith-fashion-two-tower-serving:2223 \
         --pg_host localhost \
         --pg_port 5432 \
         --pg_database looksy \
@@ -22,20 +22,12 @@ import logging
 import time
 
 import asyncpg
+import grpc
 import numpy as np
 import tensorflow as tf
+from tensorflow_serving.apis import predict_pb2, prediction_service_pb2_grpc
 
 logger = logging.getLogger(__name__)
-
-
-def load_item_tower(model_dir: str):
-    """Load the exported SavedModel and return the item tower function."""
-    model = tf.saved_model.load(model_dir)
-    if 'item_tower' in model.signatures:
-        return model.signatures['item_tower']
-    else:
-        available = list(model.signatures.keys())
-        raise ValueError(f"'item_tower' signature not found. Available: {available}")
 
 
 def build_example_proto(row: dict) -> bytes:
@@ -77,6 +69,22 @@ def build_example_proto(row: dict) -> bytes:
     return example.SerializeToString()
 
 
+def predict_item_tower(stub, examples: list, timeout: float = 30.0) -> np.ndarray:
+    """Call item_tower signature via gRPC and return item_vec embeddings."""
+    request = predict_pb2.PredictRequest()
+    request.model_spec.name = 'fashion_two_tower:entry'
+    request.model_spec.signature_name = 'item_tower'
+    request.inputs['examples'].CopyFrom(
+        tf.make_tensor_proto(examples, dtype=tf.string)
+    )
+
+    response = stub.Predict(request, timeout=timeout)
+    item_vec_proto = response.outputs['item_vec']
+    shape = [d.size for d in item_vec_proto.tensor_shape.dim]
+    item_vecs = np.array(item_vec_proto.float_val).reshape(shape)
+    return item_vecs
+
+
 async def fetch_active_products(conn: asyncpg.Connection) -> list:
     """Fetch all active products with their features."""
     rows = await conn.fetch("""
@@ -115,12 +123,6 @@ async def write_embeddings(
     batch_size: int = 100,
 ):
     """Write learned embeddings to PostgreSQL."""
-    # Ensure column exists
-    await conn.execute("""
-        ALTER TABLE embeddings.product_vectors
-        ADD COLUMN IF NOT EXISTS learned_embedding vector(128)
-    """)
-
     product_ids = list(embeddings.keys())
     total = len(product_ids)
     written = 0
@@ -131,7 +133,9 @@ async def write_embeddings(
         values = []
         for pid in batch_ids:
             emb = embeddings[pid]
-            values.append((pid, emb.tolist()))
+            # pgvector expects string format: '[0.1,0.2,...]'
+            emb_str = '[' + ','.join(str(float(v)) for v in emb) + ']'
+            values.append((pid, emb_str))
 
         await conn.executemany("""
             INSERT INTO embeddings.product_vectors (product_id, learned_embedding)
@@ -163,7 +167,8 @@ async def rebuild_index(conn: asyncpg.Connection):
 
 async def main():
     parser = argparse.ArgumentParser(description="Pre-compute item tower embeddings")
-    parser.add_argument("--model_dir", required=True, help="Path to exported SavedModel")
+    parser.add_argument("--serving_address", required=True,
+                        help="TF Serving gRPC address (host:port)")
     parser.add_argument("--pg_host", default="localhost")
     parser.add_argument("--pg_port", type=int, default=5432)
     parser.add_argument("--pg_database", default="looksy")
@@ -173,10 +178,13 @@ async def main():
     parser.add_argument("--rebuild_index", action="store_true", default=True)
     args = parser.parse_args()
 
-    # Load item tower model
-    logger.info(f"Loading item tower from {args.model_dir}")
-    item_tower_fn = load_item_tower(args.model_dir)
-    logger.info("Item tower loaded successfully")
+    # Connect to TF Serving via gRPC
+    logger.info(f"Connecting to TF Serving at {args.serving_address}")
+    channel = grpc.insecure_channel(
+        args.serving_address,
+        options=[('grpc.max_receive_message_length', 100 * 1024 * 1024)],
+    )
+    stub = prediction_service_pb2_grpc.PredictionServiceStub(channel)
 
     # Connect to PostgreSQL
     dsn = f"postgresql://{args.pg_user}:{args.pg_password}@{args.pg_host}:{args.pg_port}/{args.pg_database}"
@@ -192,7 +200,7 @@ async def main():
             logger.warning("No active products found, exiting")
             return
 
-        # Run item tower inference in batches
+        # Run item tower inference in batches via gRPC
         all_embeddings = {}
         total_batches = (len(products) + args.batch_size - 1) // args.batch_size
         start_time = time.time()
@@ -205,9 +213,8 @@ async def main():
             # Build TF Example protos
             examples = [build_example_proto(row) for row in batch]
 
-            # Run inference
-            result = item_tower_fn(examples=tf.constant(examples))
-            item_vecs = result['item_vec'].numpy()  # (batch, 128)
+            # Call item_tower via gRPC
+            item_vecs = predict_item_tower(stub, examples)
 
             for j, row in enumerate(batch):
                 all_embeddings[row['product_id']] = item_vecs[j]
@@ -239,6 +246,7 @@ async def main():
 
     finally:
         await conn.close()
+        channel.close()
 
 
 if __name__ == "__main__":

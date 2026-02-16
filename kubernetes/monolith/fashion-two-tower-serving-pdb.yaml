@@ -1,0 +1,9 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: monolith-fashion-two-tower-serving-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: monolith-fashion-two-tower-serving

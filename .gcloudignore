@@ -1,0 +1,14 @@
+.git
+data/
+data_1m/
+*.csv
+*.pyc
+__pycache__
+.venv
+venv/
+*.egg-info
+output/
+extracted_artifacts/
+deploy/
+java/
+third_party/

@@ -40,6 +40,14 @@ spec:
             app: precompute-item-embeddings
         spec:
           restartPolicy: OnFailure
+          terminationGracePeriodSeconds: 30
+          nodeSelector:
+            cloud.google.com/gke-spot: "true"
+          tolerations:
+            - key: cloud.google.com/gke-spot
+              operator: Equal
+              value: "true"
+              effect: NoSchedule
 
           # Service account with database access permissions
           serviceAccountName: default

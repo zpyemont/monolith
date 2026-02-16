@@ -6,7 +6,7 @@ metadata:
 spec:
   runPolicy:
     cleanPodPolicy: None
-    backoffLimit: 10
+    backoffLimit: 5
     ttlSecondsAfterFinished: 86400
   tfReplicaSpecs:
     PS:
@@ -18,23 +18,31 @@ spec:
             app: fashion-two-tower-csv
             role: ps
         spec:
+          terminationGracePeriodSeconds: 30
+          nodeSelector:
+            cloud.google.com/gke-spot: "true"
+          tolerations:
+            - key: cloud.google.com/gke-spot
+              operator: Equal
+              value: "true"
+              effect: NoSchedule
+          serviceAccountName: ranker-sa
           containers:
           - name: tensorflow
             image: gcr.io/looksyuk/monolith-fashion-two-tower:latest
-            imagePullPolicy: IfNotPresent
+            imagePullPolicy: Always
             command: ["python"]
             args:
               - "/fashion_model_two_tower.py"
               - "--training_type=batch"
               - "--model_dir=/checkpoints/fashion_two_tower"
               - "--model_name=fashion_two_tower"
-              - "--batch_size=128"
               # CSV training data from GCS
-              - "--fashion_batch_csv=gs://looksy-monolith-data/training_data/synthetic_training_data.csv"
+              - "--fashion_batch_csv=gs://looksy-monolith-data/training_data/synthetic_training_data_positive_only.csv"
               # Training parameters
               - "--max_steps=50000"
               - "--save_checkpoints_steps=5000"
-              - "--batch_epochs=3"
+              - "--batch_epochs=50"
             env:
               - name: ZK_SERVERS
                 value: "monolith-zookeeper-client.default.svc.cluster.local:2181"
@@ -64,23 +72,31 @@ spec:
             app: fashion-two-tower-csv
             role: worker
         spec:
+          terminationGracePeriodSeconds: 30
+          nodeSelector:
+            cloud.google.com/gke-spot: "true"
+          tolerations:
+            - key: cloud.google.com/gke-spot
+              operator: Equal
+              value: "true"
+              effect: NoSchedule
+          serviceAccountName: ranker-sa
           containers:
           - name: tensorflow
             image: gcr.io/looksyuk/monolith-fashion-two-tower:latest
-            imagePullPolicy: IfNotPresent
+            imagePullPolicy: Always
             command: ["python"]
             args:
               - "/fashion_model_two_tower.py"
               - "--training_type=batch"
               - "--model_dir=/checkpoints/fashion_two_tower"
               - "--model_name=fashion_two_tower"
-              - "--batch_size=128"
               # CSV training data from GCS
-              - "--fashion_batch_csv=gs://looksy-monolith-data/training_data/synthetic_training_data.csv"
+              - "--fashion_batch_csv=gs://looksy-monolith-data/training_data/synthetic_training_data_positive_only.csv"
               # Training parameters
               - "--max_steps=50000"
               - "--save_checkpoints_steps=5000"
-              - "--batch_epochs=3"
+              - "--batch_epochs=50"
             env:
               - name: ZK_SERVERS
                 value: "monolith-zookeeper-client.default.svc.cluster.local:2181"

@@ -35,11 +35,19 @@ spec:
       labels:
         app: monolith-fashion-two-tower-serving
     spec:
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        cloud.google.com/gke-spot: "true"
+      tolerations:
+        - key: cloud.google.com/gke-spot
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
       serviceAccountName: default
       containers:
       - name: agent
         image: gcr.io/looksyuk/monolith-fashion-two-tower:latest
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: ["python", "agent.py"]
         args:
           - "--conf=./two_tower.conf"

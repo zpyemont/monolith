@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: precompute-item-embeddings
+  namespace: default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600  # 10 min max — job should finish in ~2 min
+  template:
+    spec:
+      restartPolicy: Never
+      shareProcessNamespace: true  # so main container can kill sidecar
+      nodeSelector:
+        cloud.google.com/gke-spot: "true"
+      tolerations:
+        - key: cloud.google.com/gke-spot
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      serviceAccountName: ranker-sa
+      containers:
+      - name: precompute
+        image: gcr.io/looksyuk/monolith-fashion-two-tower:latest
+        imagePullPolicy: Always
+        command: ["sh", "-c"]
+        args:
+          - |
+            pip install --no-cache-dir asyncpg
+            # Parse DSN fields (format: host=X port=X user=X password=X dbname=X)
+            parse_dsn() { echo "$POSTGRES_DSN" | tr ' ' '\n' | grep "^$1=" | cut -d= -f2; }
+            PG_HOST=$(parse_dsn host)
+            PG_PORT=$(parse_dsn port)
+            PG_USER=$(parse_dsn user)
+            PG_PASS=$(parse_dsn password)
+            PG_DB=$(parse_dsn dbname)
+            python3 /precompute_item_embeddings.py \
+              --serving_address "monolith-fashion-two-tower-serving.default.svc.cluster.local:2223" \
+              --pg_host "$PG_HOST" \
+              --pg_port "$PG_PORT" \
+              --pg_database "$PG_DB" \
+              --pg_user "$PG_USER" \
+              --pg_password "$PG_PASS" \
+              --batch_size 256
+            EXIT_CODE=$?
+            # Kill the cloud-sql-proxy sidecar so the Job can complete
+            kill $(pgrep cloud-sql-proxy) 2>/dev/null || true
+            exit $EXIT_CODE
+        env:
+          - name: POSTGRES_DSN
+            valueFrom:
+              secretKeyRef:
+                name: ranker-secrets
+                key: postgres_dsn
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+      - name: cloud-sql-proxy
+        image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.11.3
+        args:
+          - --structured-logs
+          - --address=127.0.0.1
+          - --port=5432
+          - looksyuk:europe-west1:looksy-catalog-prod
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          runAsNonRoot: true
