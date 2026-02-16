@@ -4,11 +4,11 @@ metadata:
   name: precompute-item-embeddings
   namespace: default
 spec:
-  backoffLimit: 0
-  activeDeadlineSeconds: 600  # 10 min max — job should finish in ~2 min
+  backoffLimit: 2
+  activeDeadlineSeconds: 1800  # 30 min max — inference ~5s, DB writes ~15min
   template:
     spec:
-      restartPolicy: Never
+      restartPolicy: OnFailure
       shareProcessNamespace: true  # so main container can kill sidecar
       nodeSelector:
         cloud.google.com/gke-spot: "true"
